@@ -49,6 +49,7 @@ app.UseRouting();
 app.UseRateLimiter();
 app.Use(async (ctx, next) => await AdminGate.Invoke(ctx, next, app.Services.GetRequiredService<LocalAccounts>()));
 app.UseAntiforgery();
+app.UseStaticFiles();
 app.MapStaticAssets();
 app.MapGet("/health", async (IDbContextFactory<CatalogDb> factory, CancellationToken ct) =>
 {
