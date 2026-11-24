@@ -1,9 +1,7 @@
 # Projectstatus — 2026-11-24
 
-MVP en architectuur akkoord; zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md). Actief: #1, draft PR #5.
+Actief: #1, draft PR #5. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
 
-CI #9 groen inclusief initiële migratie en container-smoketests. GHCR AMD64-publicatieworkflow, NAS Compose, lokale configuratie en installatie-instructies toegevoegd onder deploy/. Browser-origincontrole aangepast aan geconfigureerde publieke HTTPS-origin. Nieuwe CI en daadwerkelijke imagepublicatie nog niet bevestigd. Gebruik een nieuw volume voor de eerste installatie; verwijder geen bestaande data.
+NAS-container gestart met HTTP 200 health; lokale HTTPS-toegang via Nginx Proxy Manager werkt. Blazor assets gecorrigeerd in Docker-build; gebruiker bevestigt dat knopactie nu een validatiemelding geeft. HTTP-provideradres werd afgewezen door HTTPS-only validatie; HTTP/HTTPS toegestaan met waarschuwing en specifiekere invoerfouten. Nieuwe CI/image nog te bevestigen.
 
-Volgende stap: bevestig CI en GHCR-tag, configureer lokale HTTPS-toegang, importeer geautoriseerde providers en test Nuvio + IPTV/Arvio. HTTPS-upstream zonder redirects en TS-only zijn voorlopig beperkingen. Nog geen echte import/playback of NAS-deployment bevestigd.
-
-Werkwijze: zie [AGENTS.md](../AGENTS.md).
+Open: echte providerimport en playback met Nuvio/Arvio, redirect/HLS indien nodig, SQLite dependency-waarschuwing, duidelijkere accountvalidatie. Geen credentials in Git. HTTP-upstream is onversleuteld; beveiligde lokale toegang blijft vereist. Geen bewezen playback.
