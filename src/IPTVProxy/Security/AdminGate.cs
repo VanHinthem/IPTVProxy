@@ -6,7 +6,7 @@ public static class AdminGate
 {
     public static async Task Invoke(HttpContext ctx, Func<Task> next, LocalAccounts accounts)
     {
-        var path = ctx.Request.Path;
+        var publicOrigin = new Uri(ctx.RequestServices.GetRequiredService<IConfiguration>()["PublicBaseUrl"] ?? "http://localhost:8080");
         // Only the mapped read-only Xtream routes and health may bypass admin auth.
         var endpoint = ctx.GetEndpoint() as RouteEndpoint;
         var route = endpoint?.RoutePattern.RawText;
@@ -18,8 +18,8 @@ public static class AdminGate
         // Reject cross-origin Blazor negotiation and WebSocket connections.
         if (ctx.Request.Headers.TryGetValue("Origin", out var origin) &&
             (!Uri.TryCreate(origin.ToString(), UriKind.Absolute, out var uri) ||
-             !string.Equals(uri.Authority, ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase) ||
-             uri.Scheme != ctx.Request.Scheme))
+             !string.Equals(uri.Authority, publicOrigin.Authority, StringComparison.OrdinalIgnoreCase) ||
+             uri.Scheme != publicOrigin.Scheme))
         { ctx.Response.StatusCode = 403; return; }
         var header = ctx.Request.Headers.Authorization.ToString();
         if (header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase) && header.Length < 4096)
