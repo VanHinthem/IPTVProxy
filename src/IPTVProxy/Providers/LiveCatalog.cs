@@ -86,6 +86,19 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
             using var client = clients.CreateClient("provider");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromMinutes(2));
+            using var categoryResponse = await client.GetAsync(ApiUri(provider, "get_live_categories"), timeout.Token);
+            categoryResponse.EnsureSuccessStatusCode();
+            using var categoryDoc = JsonDocument.Parse(await categoryResponse.Content.ReadAsByteArrayAsync(timeout.Token));
+            if (categoryDoc.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Invalid categories.");
+            var categories = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var item in categoryDoc.RootElement.EnumerateArray())
+            {
+                var categoryId = item.GetProperty("category_id").ToString();
+                var categoryName = item.GetProperty("category_name").GetString();
+                if (string.IsNullOrWhiteSpace(categoryId) || string.IsNullOrWhiteSpace(categoryName) ||
+                    !categories.TryAdd(categoryId, categoryName))
+                    throw new InvalidDataException("Invalid or duplicate category.");
+            }
             using var response = await client.GetAsync(ApiUri(provider, "get_live_streams"), timeout.Token);
             response.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(timeout.Token));
@@ -98,12 +111,21 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
                 var name = item.GetProperty("name").GetString();
                 if (string.IsNullOrWhiteSpace(name)) throw new InvalidDataException("Invalid stream name.");
                 var cat = item.TryGetProperty("category_id", out var category) ? category.ToString() : "";
+                if (!categories.ContainsKey(cat)) categories[cat] = string.IsNullOrEmpty(cat) ? "Uncategorized" : "Category " + cat;
                 if (!incoming.TryAdd(id, (name, cat))) throw new InvalidDataException("Duplicate stream ID.");
             }
             var existing = await db.LiveStreams.Where(s => s.ProviderId == providerId).ToListAsync(ct);
             var activeCount = existing.Count(s => s.Active);
             if (incoming.Count == 0 || incoming.Count < activeCount * 0.8)
                 throw new InvalidDataException("Empty or suspiciously reduced catalog; previous data retained.");
+            var existingCategories = await db.LiveCategories.Where(c => c.ProviderId == providerId).ToListAsync(ct);
+            foreach (var row in existingCategories)
+            {
+                row.Active = categories.Remove(row.SourceId, out var categoryName);
+                if (row.Active) row.Name = categoryName!;
+            }
+            foreach (var (sourceId, categoryName) in categories)
+                db.LiveCategories.Add(new LiveCategory { ProviderId = providerId, SourceId = sourceId, Name = categoryName });
             foreach (var row in existing)
             {
                 row.Active = incoming.Remove(row.SourceId, out var value);
