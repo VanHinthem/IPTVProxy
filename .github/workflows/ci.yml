@@ -28,7 +28,11 @@ jobs:
           done
           curl -fsS http://127.0.0.1:8080/health
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)" = 401
-          curl -fsS -u "admin:$admin" http://127.0.0.1:8080/ | grep -q IPTVProxy
+          page=$(curl -fsS -u "admin:$admin" http://127.0.0.1:8080/)
+          grep -q IPTVProxy <<< "$page"
+          script=$(printf '%s' "$page" | python3 -c 'import sys,re; m=re.search(r"""<script[^>]+src="([^"]*blazor[^"]*\.js)" """.strip(),sys.stdin.read()); assert m, "Blazor script missing"; print(m.group(1))')
+          curl -fsS -u "admin:$admin" "http://127.0.0.1:8080/${script#/}" -o /tmp/blazor.js
+          test -s /tmp/blazor.js
           test "$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8080/player_api.php?username=viewer&password=wrong')" = 401
           curl -fsS --get --data-urlencode username=viewer --data-urlencode "password=$viewer" http://127.0.0.1:8080/player_api.php | jq -e '.user_info.auth == 1'
           curl -fsS --get --data-urlencode username=viewer --data-urlencode "password=$viewer" --data-urlencode action=get_live_streams http://127.0.0.1:8080/player_api.php | jq -e '. == []'
