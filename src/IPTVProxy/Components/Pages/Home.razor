@@ -23,7 +23,8 @@
 <h2>Provider toevoegen</h2>
 <div style="display:grid;gap:.5rem;max-width:28rem">
 <label>Naam <input @bind="name" maxlength="100" /></label>
-<label>HTTPS-server <input @bind="origin" placeholder="https://provider.example" /></label>
+<label>Server (HTTP/HTTPS) <input @bind="origin" placeholder="http://provider.example:80" /></label>
+<p style="font-size:.9rem">Gebruik HTTPS indien beschikbaar. Bij HTTP worden providercredentials en streams onversleuteld verstuurd.</p>
 <label>Gebruikersnaam <input @bind="username" autocomplete="off" /></label>
 <label>Wachtwoord <input type="password" @bind="password" autocomplete="new-password" /></label>
 <label>Verbindingslimiet <input type="number" min="1" max="100" @bind="limit" /></label>
@@ -58,7 +59,8 @@
             status = "Provider toegevoegd. Start nu de import.";
             await Refresh();
         }
-        catch { status = "Provider toevoegen mislukt. Controleer de invoer."; }
+        catch (ArgumentException ex) { status = ex.Message; }
+        catch { status = "Provider opslaan mislukt. Controleer de databaseconfiguratie."; }
         finally { password = ""; busy = false; }
     }
     private async Task Import(int id)
