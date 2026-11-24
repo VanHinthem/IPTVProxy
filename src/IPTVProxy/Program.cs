@@ -42,7 +42,7 @@ if (origin.Scheme is not ("http" or "https") || origin.UserInfo.Length != 0 || o
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CatalogDb>();
-    await db.Database.EnsureCreatedAsync();
+    await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
 }
 app.UseRouting();
