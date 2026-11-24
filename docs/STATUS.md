@@ -1,9 +1,9 @@
 # Projectstatus — 2026-11-24
 
-MVP en architectuur akkoord; zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md). Actief: #1, eerste kijkbare live-tv, draft PR #5.
+MVP en architectuur akkoord; zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md). Actief: #1, draft PR #5.
 
-CI #7 groen: geïntegreerde Docker-start, authenticatie en lege Xtream-catalogus. Daarna oorspronkelijke providercategorieën met stabiele IDs en initiële EF Core-migratie toegevoegd; nieuwe CI nog niet bevestigd. De eerdere EnsureCreated-ontwikkeldatabase is niet automatisch migreerbaar; gebruik een nieuw leeg volume voor de eerste echte installatie, verwijder geen bestaande gegevens zonder backup.
+CI #9 groen inclusief initiële migratie en container-smoketests. GHCR AMD64-publicatieworkflow, NAS Compose, lokale configuratie en installatie-instructies toegevoegd onder deploy/. Browser-origincontrole aangepast aan geconfigureerde publieke HTTPS-origin. Nieuwe CI en daadwerkelijke imagepublicatie nog niet bevestigd. Gebruik een nieuw volume voor de eerste installatie; verwijder geen bestaande data.
 
-Open: migratie/startup en reimport testen, veilige lokale HTTPS-toegang, echte provider- en clienttests, eventuele redirect/HLS-ondersteuning. Nog geen NAS-deployment of bewezen playback.
+Volgende stap: bevestig CI en GHCR-tag, configureer lokale HTTPS-toegang, importeer geautoriseerde providers en test Nuvio + IPTV/Arvio. HTTPS-upstream zonder redirects en TS-only zijn voorlopig beperkingen. Nog geen echte import/playback of NAS-deployment bevestigd.
 
 Werkwijze: zie [AGENTS.md](../AGENTS.md).
