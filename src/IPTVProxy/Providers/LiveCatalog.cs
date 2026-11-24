@@ -16,11 +16,11 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
 
     public static Uri ValidateBase(string value)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0 ||
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") || uri.UserInfo.Length != 0 ||
             uri.Query.Length != 0 || uri.Fragment.Length != 0 ||
             uri.AbsolutePath != "/" || uri.IsLoopback)
-            throw new ArgumentException("Use an HTTPS provider origin without path, credentials or query.");
+            throw new ArgumentException("Gebruik een HTTP- of HTTPS-serveradres zonder extra pad, inloggegevens of queryparameters.");
         return uri;
     }
 
@@ -60,7 +60,7 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
         var uri = ValidateBase(origin);
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(username) ||
             string.IsNullOrWhiteSpace(password) || limit < 1 || limit > 100)
-            throw new ArgumentException("Invalid provider configuration.");
+            throw new ArgumentException("Vul naam, gebruikersnaam en wachtwoord in en kies een verbindingslimiet tussen 1 en 100.");
         await using var db = await factory.CreateDbContextAsync(ct);
         db.Providers.Add(new Provider { Name = name.Trim(), BaseUrl = uri.AbsoluteUri,
             ProtectedCredentials = protector.Protect(JsonSerializer.Serialize(new ProviderCredentials(username, password))),
