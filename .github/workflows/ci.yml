@@ -13,3 +13,23 @@ jobs:
           dotnet-version: '10.0.x'
       - run: dotnet build src/IPTVProxy/IPTVProxy.csproj -c Release
       - run: docker build -t iptvproxy:ci .
+      - name: Container smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          admin=$(openssl rand -hex 16)
+          viewer=$(openssl rand -hex 16)
+          docker run -d --name iptvproxy-ci -p 127.0.0.1:8080:8080 \
+            -e Accounts__AdminPassword="$admin" -e Accounts__IptvPassword="$viewer" iptvproxy:ci
+          trap 'docker rm -f iptvproxy-ci >/dev/null' EXIT
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)" = 401
+          curl -fsS -u "admin:$admin" http://127.0.0.1:8080/ | grep -q IPTVProxy
+          test "$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8080/player_api.php?username=viewer&password=wrong')" = 401
+          curl -fsS --get --data-urlencode username=viewer --data-urlencode "password=$viewer" http://127.0.0.1:8080/player_api.php | jq -e '.user_info.auth == 1'
+          curl -fsS --get --data-urlencode username=viewer --data-urlencode "password=$viewer" --data-urlencode action=get_live_streams http://127.0.0.1:8080/player_api.php | jq -e '. == []'
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/live/viewer/$viewer/1.ts")" = 404
