@@ -5,9 +5,12 @@ namespace IPTVProxy.Data;
 public sealed class CatalogDb(DbContextOptions<CatalogDb> options) : DbContext(options)
 {
     public DbSet<Provider> Providers => Set<Provider>();
+    public DbSet<LiveCategory> LiveCategories => Set<LiveCategory>();
     public DbSet<LiveStream> LiveStreams => Set<LiveStream>();
     protected override void OnModelCreating(ModelBuilder model)
     {
+        model.Entity<LiveCategory>().HasIndex(x => new { x.ProviderId, x.SourceId }).IsUnique();
+        model.Entity<LiveCategory>().HasOne<Provider>().WithMany().HasForeignKey(x => x.ProviderId);
         model.Entity<LiveStream>().HasIndex(x => new { x.ProviderId, x.SourceId }).IsUnique();
         model.Entity<LiveStream>().HasOne<Provider>().WithMany().HasForeignKey(x => x.ProviderId);
     }
@@ -29,5 +32,14 @@ public sealed class LiveStream
     public long SourceId { get; set; }
     public string Name { get; set; } = "";
     public string CategoryId { get; set; } = "";
+    public bool Active { get; set; } = true;
+}
+
+public sealed class LiveCategory
+{
+    public int Id { get; set; }
+    public int ProviderId { get; set; }
+    public string SourceId { get; set; } = "";
+    public string Name { get; set; } = "";
     public bool Active { get; set; } = true;
 }
