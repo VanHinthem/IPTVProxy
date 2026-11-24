@@ -1,5 +1,9 @@
 # Projectstatus — 2026-11-24
 
-MVP en architectuur akkoord; zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md). Vier werkblokken #1–#4 aangemaakt. Actief: #1, eerste kijkbare live-tv. Implementatie start; nog geen gevalideerde build, providerintegratie of NAS-deployment.
+MVP en architectuur akkoord; zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md). Actief: #1, eerste kijkbare live-tv, draft PR #5.
 
-Werkwijze: zie [AGENTS.md](../AGENTS.md). Eerst een end-to-end kijkbare build, daarna uitbreiden.
+Op de ontwikkelbranch: .NET 10/Blazor/SQLite, bootstrapaccounts via lokale configuratie, versleutelde providercredentials, handmatige import met krimpcontrole, providerbeheerpagina, Xtream-auth/catalogus en native TS-proxy met limieten. CI #4 was groen vóór integratie; nieuwe integratie en container-smoketest nog te valideren.
+
+Open: oorspronkelijke categorienamen (tijdelijk één categorie per provider), database-migraties vóór echte persistente data, secure deployment/HTTPS, client- en providertests, eventuele redirect/HLS-ondersteuning. Nog geen NAS-deployment of bewezen playback.
+
+Werkwijze: zie [AGENTS.md](../AGENTS.md).
