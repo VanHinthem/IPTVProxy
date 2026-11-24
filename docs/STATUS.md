@@ -1,13 +1,14 @@
 # Projectstatus — 2026-11-24
 
-Fase: functionele discovery afgerond op hoofdlijnen. Zie [functioneel ontwerp](FUNCTIONAL_DESIGN.md). Nog geen applicatiecode, gekozen stack, gevalideerde providerintegratie of definitieve releaseplanning.
+Functionele discovery afgerond op hoofdlijnen. Zie [functioneel ontwerp](FUNCTIONAL_DESIGN.md). Nog geen applicatiecode, definitieve stack of gevalideerde providerintegratie.
 
 ## Vervolg
-1. MVP afbakenen en prioriteren tegenover V1 en latere uitbreiding; expliciet vastleggen wat niet in MVP zit.
-2. Technische proof of concept: twee geautoriseerde providers, Nuvio + IPTV en Arvio, XC-contract, EPG, MPEG-TS/HLS, VOD seek, sharing, failover en limieten. Metingen en acceptatiecriteria vastleggen; geen echte credentials in Git.
-3. Architectuur en datamodel kiezen op basis van resultaten. .NET en één Docker-container zijn kandidaten, geen besluiten.
-4. Roadmap, werkpakketten, tests, CI/CD en projectworkflow vastleggen.
-5. Pas daarna gefaseerd implementeren.
+1. Bepaal een compacte eerste bruikbare versie (MVP), onderscheid gewenste V1 en latere uitbreidingen.
+2. Kies een eenvoudige architectuur en voer gericht haalbaarheidsonderzoek uit waar nodig; combineer dit waar praktisch met implementatie.
+3. Bouw in enkele grotere functionele werkblokken een end-to-end versie, met echte geautoriseerde providerdata en Nuvio + IPTV/Arvio als doelclients.
+4. Deploy vroeg naar de NAS en verbeter vanuit praktijkervaring.
+
+Geen verplicht afzonderlijk PoC-traject, uitvoerige roadmap, formele stagegates of volledige regressiematrix vooraf. .NET en één Docker-container zijn kandidaten, geen definitieve besluiten. Technische aannames blijven te valideren.
 
 ## Werkwijze
-Functionele baseline is de bron voor scopebesluiten; wijzigingen expliciet documenteren. Eenvoud en betrouwbaarheid gaan boven featurepariteit met Dispatcharr. Geen implementatie starten vóór afbakening en technische haalbaarheid. Voorlopige instellingen en technische aannames zijn niet gevalideerd.
+IPTVProxy is een hobbyproject: snelheid naar werkende software, eenvoud en betrouwbaarheid gaan voor proces en featurepariteit. Zie [AGENTS.md](../AGENTS.md) voor de bindende ontwikkelafspraken. Functionele baseline is richtinggevend; leg betekenisvolle scopewijzigingen beknopt vast.
