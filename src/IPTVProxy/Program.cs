@@ -1,21 +1,53 @@
 using IPTVProxy.Components;
 using IPTVProxy.Data;
+using IPTVProxy.Endpoints;
+using IPTVProxy.Providers;
+using IPTVProxy.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+// Request URLs and upstream exceptions can contain credentials.
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.None);
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.None);
+builder.Logging.AddFilter("System.Net.Http", LogLevel.None);
 var dataDir = Path.GetFullPath(builder.Configuration["DataDirectory"] ?? "data");
 Directory.CreateDirectory(dataDir);
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDir, "keys"))).SetApplicationName("IPTVProxy");
 builder.Services.AddDbContextFactory<CatalogDb>(options => options.UseSqlite(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = Path.Combine(dataDir, "iptvproxy.db") }.ToString()));
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+builder.Services.AddSingleton<LocalAccounts>();
+builder.Services.AddSingleton<LiveCatalog>();
+builder.Services.AddSingleton<LivePlayback>();
+builder.Services.AddHttpClient("provider", c => {
+    c.Timeout = Timeout.InfiniteTimeSpan;
+    c.MaxResponseContentBufferSize = 64 * 1024 * 1024;
+}).RemoveAllLoggers().ConfigurePrimaryHttpMessageHandler(LiveCatalog.CreateHandler);
+builder.Services.AddRateLimiter(options => {
+    options.RejectionStatusCode = 429;
+    options.AddPolicy("xtream", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
 var app = builder.Build();
+_ = app.Services.GetRequiredService<LocalAccounts>();
+var origin = new Uri(builder.Configuration["PublicBaseUrl"] ?? "http://localhost:8080");
+if (origin.Scheme is not ("http" or "https") || origin.UserInfo.Length != 0 || origin.AbsolutePath != "/" || origin.Query.Length != 0 || origin.Fragment.Length != 0)
+    throw new InvalidOperationException("PublicBaseUrl must be an HTTP(S) origin.");
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CatalogDb>();
     await db.Database.EnsureCreatedAsync();
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
 }
+app.UseRouting();
+app.UseRateLimiter();
+app.Use(async (ctx, next) => await AdminGate.Invoke(ctx, next, app.Services.GetRequiredService<LocalAccounts>()));
 app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapGet("/health", async (IDbContextFactory<CatalogDb> factory, CancellationToken ct) =>
@@ -23,5 +55,6 @@ app.MapGet("/health", async (IDbContextFactory<CatalogDb> factory, CancellationT
     await using var db = await factory.CreateDbContextAsync(ct);
     return await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ok" }) : Results.StatusCode(503);
 });
+app.MapXtream();
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 app.Run();
