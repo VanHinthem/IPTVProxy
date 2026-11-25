@@ -117,12 +117,22 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             ctx.Response.ContentType = "video/mp2t";
             ctx.Response.Headers.CacheControl = "no-store";
             ctx.Response.Headers["X-Accel-Buffering"] = "no";
-            await foreach (var chunk in subscriber.Reader.ReadAllAsync(ctx.RequestAborted))
+            var writer = ctx.Response.BodyWriter;
+            while (await subscriber.Reader.WaitToReadAsync(ctx.RequestAborted))
             {
+                // Coalesce available chunks without waiting for a batch to fill.
+                var bytes = 0;
+                while (bytes < 256 * 1024 && subscriber.Reader.TryRead(out var chunk))
+                {
+                    chunk.AsSpan().CopyTo(writer.GetSpan(chunk.Length));
+                    writer.Advance(chunk.Length);
+                    bytes += chunk.Length;
+                }
+                if (bytes == 0) continue;
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
                 timeout.CancelAfter(TimeSpan.FromSeconds(20));
-                await ctx.Response.Body.WriteAsync(chunk, timeout.Token);
-                await ctx.Response.Body.FlushAsync(timeout.Token);
+                var flush = await writer.FlushAsync(timeout.Token);
+                if (flush.IsCanceled || flush.IsCompleted) break;
             }
             if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 502;
         }
@@ -149,9 +159,35 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         }
     }
 
+    private async Task EnqueueWithBackpressure(Session session, Channel<byte[]> subscriber, byte[] chunk, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            await subscriber.Writer.WriteAsync(chunk, timeout.Token);
+        }
+        catch (ChannelClosedException) { }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            lock (gate)
+            {
+                if (!session.Subscribers.Remove(subscriber)) return;
+                log.LogWarning("Subscriber queue remained full for five seconds for stream {StreamId}", session.Id);
+                subscriber.Writer.TryComplete(new IOException("Subscriber too slow."));
+                if (session.Subscribers.Count == 0 && !session.Closing)
+                {
+                    session.Closing = true;
+                    session.Stop.Cancel();
+                }
+            }
+        }
+    }
+
     private async Task Pump(Session session, Provider provider, long sourceId)
     {
         var ct = session.Stop.Token;
+        await Task.Yield();
         try
         {
             var credentials = catalog.Credentials(provider);
@@ -184,18 +220,15 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 pending = total - length;
                 Buffer.BlockCopy(buffer, length, buffer, 0, pending);
                 if (first) { log.LogInformation("First upstream data for stream {StreamId}: {Bytes} bytes", session.Id, length); first = false; }
-                lock (gate)
+                Channel<byte[]>[] targets;
+                lock (gate) targets = session.Subscribers.ToArray();
+                List<Task>? waiting = null;
+                foreach (var sub in targets)
                 {
-                    foreach (var sub in session.Subscribers.ToArray())
-                    {
-                        if (sub.Writer.TryWrite(chunk)) continue;
-                        log.LogWarning("Subscriber queue full for stream {StreamId}; disconnecting slow subscriber", session.Id);
-                        sub.Writer.TryComplete(new IOException("Subscriber too slow."));
-                        session.Subscribers.Remove(sub);
-                    }
-                    if (session.Subscribers.Count == 0 && !session.Closing)
-                    { session.Closing = true; session.Stop.Cancel(); }
+                    if (sub.Writer.TryWrite(chunk)) continue;
+                    (waiting ??= new()).Add(EnqueueWithBackpressure(session, sub, chunk, ct));
                 }
+                if (waiting is not null) await Task.WhenAll(waiting);
             }
         }
         catch (Exception ex)
