@@ -1,6 +1,6 @@
 # Projectstatus — 2026-11-25
 
-Werkblok #1 afgerond op 25 november 2026; PR #5 gemerged naar main (7c0b78c). Werkblok #2 functioneel geaccepteerd, PR #6 in review; na merge volgt #3. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
+Werkblok #1 afgerond op 25 november 2026; PR #5 gemerged naar main (7c0b78c). Werkblok #2 afgerond; PR #6 gemerged naar main (d0ce164). Volgend werkblok: #3 films en series. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
 
 NAS en Nginx HTTPS werken. IPTV-subdomein DNS-only om vertraging via Cloudflare-proxy te vermijden. VLC speelt direct af; Nuvio playback en single-viewer zenderwisseling bevestigd. Twee geautoriseerde providers geïmporteerd (86.514 livekanalen). HTTP/HTTPS upstream en maximaal vijf gecontroleerde redirects ondersteund.
 
@@ -39,3 +39,5 @@ NAS cd51e25: user accepted group-management increment. Artwork adds signed local
 
 ## Afsluiting werkblok 2 — 25 november 2026
 NAS 01546f8: zenderlogo's zichtbaar en geaccepteerd. EPG eerder bevestigd; groepsbeheer algemeen geaccepteerd. SQLite: SuperTV 157637 en Strong8K 238844 programma's, beide 0 artwork; refresh na upgrade en originele XMLTV-artwork niet bevestigd. Programma-afbeeldingen niet afzonderlijk getest. CI 45637782018 en Development image 45637768770 groen. PR #6 gereed voor review na afsluitende documentatie en aanvullende regressiechecks. #2 sluit bij merge; #3 films/series volgt. Niet-blokkerende verbeteringen: https://github.com/VanHinthem/IPTVProxy/issues/7. Externe toegang voor meerdere gebruikers, capaciteit, actieve failover en monitoring blijven #4. Geen migratie van raw favorieten. Geen nieuwe NAS-deployment nodig voor alleen documentatie/tests.
+
+PR #6 gemerged op 25 november 2026 (d0ce164). Afsluitende CI 45640294542 en image 45640277665 groen. #2 afgerond; #3 is volgend werkblok.

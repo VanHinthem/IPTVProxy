@@ -8,7 +8,7 @@ Modulaire monoliet: .NET 10 / ASP.NET Core, Blazor Web App Interactive Server, E
 - [#3 Films en series](https://github.com/VanHinthem/IPTVProxy/issues/3): categorie-selectie, metadata on demand, Range/seek.
 - [#4 Betrouwbaarheid](https://github.com/VanHinthem/IPTVProxy/issues/4): live sharing, failover, providerlimieten, monitoring. Providerprioriteit eerst; HLS eerder indien nodig.
 
-Status 25 november 2026: #1 gemerged; #2 functioneel geaccepteerd, PR #6 gereed voor review; #3 volgende na merge. Live-catalogus/EPG-verfijningen: https://github.com/VanHinthem/IPTVProxy/issues/7.
+Status 25 november 2026: #1 gemerged; #2 gemerged (PR #6); #3 volgende. Live-catalogus/EPG-verfijningen: https://github.com/VanHinthem/IPTVProxy/issues/7.
 
 Alle vier samen vormen de MVP. V1: uitgebreidere matching, dynamische groepen, externe XMLTV, meerdere accounts/profielen, strategieën, historie, backup/herstel. Later: overige bronnen, uitgebreide analyses, metadata-verrijking en complexe regels. Zie FUNCTIONAL_DESIGN.md voor productvisie.
 
