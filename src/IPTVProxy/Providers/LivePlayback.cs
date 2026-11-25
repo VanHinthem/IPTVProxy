@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IPTVProxy.Providers;
 
-public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, LocalAccounts accounts, ILogger<LivePlayback> log)
+public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, LocalAccounts accounts, ILogger<LivePlayback> log, IConfiguration config)
 {
     private readonly object gate = new();
     private readonly Dictionary<int, Session> sessions = new();
@@ -16,6 +16,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         public CancellationTokenSource Stop { get; } = new();
         public HashSet<Channel<byte[]>> Subscribers { get; } = new();
         public bool Closing { get; set; }
+        public TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private async Task<HttpResponseMessage> OpenStream(HttpClient client, Uri uri, int id, CancellationToken ct)
@@ -54,24 +55,62 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         });
         Session session;
         bool start = false;
-        lock (gate)
+        var allowSwitch = provider.ConnectionLimit == 1 &&
+            config.GetValue("Playback:SingleViewerChannelSwitch", true);
+        using var switchTimeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+        switchTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+        while (true)
         {
-            if (sessions.TryGetValue(id, out var existing))
+            Task? release = null;
+            lock (gate)
             {
-                if (existing.Closing || existing.Subscribers.Count >= 16) { ctx.Response.StatusCode = 503; return; }
-                session = existing;
+                if (sessions.TryGetValue(id, out var existing))
+                {
+                    if (existing.Closing) release = existing.Released.Task;
+                    else
+                    {
+                        if (existing.Subscribers.Count >= 16) { ctx.Response.StatusCode = 503; return; }
+                        session = existing;
+                        session.Subscribers.Add(subscriber);
+                        break;
+                    }
+                }
+                else
+                {
+                    var occupied = sessions.Values.Where(s => s.ProviderId == provider.Id).ToArray();
+                    if (occupied.Length < provider.ConnectionLimit)
+                    {
+                        session = new Session(id, provider.Id);
+                        sessions.Add(id, session);
+                        session.Subscribers.Add(subscriber);
+                        start = true;
+                        break;
+                    }
+                    var previous = occupied.FirstOrDefault(s => s.Closing);
+                    if (previous is null && allowSwitch)
+                    {
+                        previous = occupied[0];
+                        log.LogInformation("Single-viewer channel switch: stream {Previous} to {Next}", previous.Id, id);
+                        previous.Closing = true;
+                        previous.Stop.Cancel();
+                    }
+                    if (previous is null)
+                    {
+                        log.LogWarning("Provider {ProviderId} connection limit reached", provider.Id);
+                        ctx.Response.StatusCode = 503;
+                        return;
+                    }
+                    release = previous.Released.Task;
+                }
             }
-            else
+            try { await release!.WaitAsync(switchTimeout.Token); }
+            catch (OperationCanceledException)
             {
-                if (sessions.Values.Count(s => s.ProviderId == provider.Id) >= provider.ConnectionLimit)
-                { log.LogWarning("Provider {ProviderId} connection limit reached", provider.Id); ctx.Response.StatusCode = 503; return; }
-                session = new Session(id, provider.Id);
-                sessions.Add(id, session);
-                start = true;
+                if (!ctx.RequestAborted.IsCancellationRequested) ctx.Response.StatusCode = 503;
+                return;
             }
-            session.Subscribers.Add(subscriber);
-            log.LogInformation("Stream {StreamId}: {Subscribers} subscribers, new upstream {NewUpstream}", id, session.Subscribers.Count, start);
         }
+        log.LogInformation("Stream {StreamId}: new upstream {NewUpstream}", id, start);
         if (start) _ = Pump(session, provider, stream.SourceId);
         try
         {
@@ -171,6 +210,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 session.Subscribers.Clear();
                 sessions.Remove(session.Id);
                 session.Stop.Dispose();
+                session.Released.TrySetResult();
             }
             log.LogInformation("Upstream ended for stream {StreamId}", session.Id);
         }
