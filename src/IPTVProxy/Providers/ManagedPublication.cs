@@ -14,12 +14,12 @@ public static class ManagedPublication
     public sealed record Published(int Id, int GroupId, int ChannelId, string Name, Candidate Source);
     public static Task<bool> IsEnabled(CatalogDb db, CancellationToken ct) =>
         db.PublicationSettings.AsNoTracking().AnyAsync(x => x.Id == 1 && x.Managed, ct);
-    private static IQueryable<Candidate> Candidates(CatalogDb db) =>
+    private static IQueryable<Candidate> Candidates(CatalogDb db, int? channelId = null) =>
         from link in db.ChannelSources.AsNoTracking()
         join s in db.LiveStreams.AsNoTracking() on link.LiveStreamId equals s.Id
         join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id
         join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
-        where s.Active && p.Enabled && c.Active && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
+        where (channelId == null || link.LogicalChannelId == channelId) && s.Active && p.Enabled && c.Active && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
         select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId);
 
     public static Candidate[] Rank(ChannelGroup group, IEnumerable<Candidate> candidates, int preferredStreamId = 0)
@@ -88,6 +88,6 @@ public static class ManagedPublication
         var channel = await db.LogicalChannels.AsNoTracking().SingleOrDefaultAsync(x => x.Id == channelId, ct);
         if (group is null || channel is null) return [];
         var manual = await db.GroupOverrides.AsNoTracking().Where(x => x.GroupId == groupId && x.ChannelId == channelId).Select(x => (bool?)x.Include).SingleOrDefaultAsync(ct);
-        return Eligible(group, channel, await Candidates(db).Where(x => x.ChannelId == channelId).ToListAsync(ct), manual);
+        return Eligible(group, channel, await Candidates(db, channelId).ToListAsync(ct), manual);
     }
 }
