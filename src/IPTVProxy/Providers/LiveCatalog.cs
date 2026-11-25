@@ -91,6 +91,7 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
             using var categoryDoc = JsonDocument.Parse(await categoryResponse.Content.ReadAsByteArrayAsync(timeout.Token));
             if (categoryDoc.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Invalid categories.");
             var categories = new Dictionary<string, string>(StringComparer.Ordinal);
+            var categoryOrder = new Dictionary<string,int>(StringComparer.Ordinal);
             foreach (var item in categoryDoc.RootElement.EnumerateArray())
             {
                 var categoryId = item.GetProperty("category_id").ToString();
@@ -98,12 +99,13 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
                 if (string.IsNullOrWhiteSpace(categoryId) || string.IsNullOrWhiteSpace(categoryName) ||
                     !categories.TryAdd(categoryId, categoryName))
                     throw new InvalidDataException("Invalid or duplicate category.");
+                categoryOrder[categoryId]=categoryOrder.Count;
             }
             using var response = await client.GetAsync(ApiUri(provider, "get_live_streams"), timeout.Token);
             response.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(timeout.Token));
             if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Invalid catalog.");
-            var incoming = new Dictionary<long, (string Name, string Category, string EpgId, string Logo)>();
+            var incoming = new Dictionary<long, (string Name, string Category, string EpgId, string Logo, int Order)>();
             foreach (var item in doc.RootElement.EnumerateArray())
             {
                 if (!long.TryParse(item.GetProperty("stream_id").ToString(), out var id) || id <= 0)
@@ -114,7 +116,7 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
                 if (!categories.ContainsKey(cat)) categories[cat] = string.IsNullOrEmpty(cat) ? "Uncategorized" : "Category " + cat;
                 var epg = item.TryGetProperty("epg_channel_id", out var epgValue) && epgValue.ValueKind == JsonValueKind.String ? epgValue.GetString() ?? "" : "";
                 var logo = item.TryGetProperty("stream_icon", out var logoValue) && logoValue.ValueKind == JsonValueKind.String ? logoValue.GetString() ?? "" : "";
-                if (!incoming.TryAdd(id, (name, cat, epg, logo))) throw new InvalidDataException("Duplicate stream ID.");
+                if (!incoming.TryAdd(id, (name, cat, epg, logo, incoming.Count))) throw new InvalidDataException("Duplicate stream ID.");
             }
             var existing = await db.LiveStreams.Where(s => s.ProviderId == providerId).ToListAsync(ct);
             var activeCount = existing.Count(s => s.Active);
@@ -125,17 +127,17 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
             foreach (var row in existingCategories)
             {
                 row.Active = categories.Remove(row.SourceId, out var categoryName);
-                if (row.Active) row.Name = categoryName!;
+                if (row.Active) {row.Name = categoryName!;row.SourceOrder=categoryOrder.GetValueOrDefault(row.SourceId,int.MaxValue);}
             }
             foreach (var (sourceId, categoryName) in categories)
-                db.LiveCategories.Add(new LiveCategory { ProviderId = providerId, SourceId = sourceId, Name = categoryName });
+                db.LiveCategories.Add(new LiveCategory { ProviderId = providerId, SourceId = sourceId, Name = categoryName, SourceOrder=categoryOrder.GetValueOrDefault(sourceId,int.MaxValue) });
             foreach (var row in existing)
             {
                 row.Active = incoming.Remove(row.SourceId, out var value);
-                if (row.Active) { row.Name = value.Name; row.CategoryId = value.Category; row.EpgId = value.EpgId; row.Logo = value.Logo; }
+                if (row.Active) { row.Name = value.Name; row.CategoryId = value.Category; row.EpgId = value.EpgId; row.Logo = value.Logo; row.SourceOrder=value.Order; }
             }
             foreach (var (id, value) in incoming)
-                db.LiveStreams.Add(new LiveStream { ProviderId = providerId, SourceId = id, Name = value.Name, CategoryId = value.Category, EpgId = value.EpgId, Logo = value.Logo });
+                db.LiveStreams.Add(new LiveStream { ProviderId = providerId, SourceId = id, Name = value.Name, CategoryId = value.Category, EpgId = value.EpgId, Logo = value.Logo, SourceOrder=value.Order });
             await db.SaveChangesAsync(ct);
             await ChannelMatching.ReconcileAsync(db, ct);
             await transaction.CommitAsync(ct);

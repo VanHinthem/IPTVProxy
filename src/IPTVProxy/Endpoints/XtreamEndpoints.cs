@@ -9,12 +9,21 @@ public static class XtreamEndpoints
 {
     public static void MapXtream(this WebApplication app)
     {
+        app.MapGet("/xmltv.php", XmlTv).RequireRateLimiting("xtream");
         app.MapGet("/player_api.php", Api).RequireRateLimiting("xtream");
         app.MapGet("/live/{username}/{password}/{id:int}.ts", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");
         app.MapGet("/live/{username}/{password}/{id:int}", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");
         app.MapGet("/{username}/{password}/{id:int}", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");
     }
 
+    private static async Task<IResult> XmlTv(HttpContext ctx,LocalAccounts accounts,XmlTvGuide guide)
+    {
+        var q=ctx.Request.Query;
+        if(!accounts.IptvValid(q["username"].ToString(),q["password"].ToString()))return Results.Unauthorized();
+        ctx.Response.Headers.CacheControl="no-store";
+        await guide.WriteAsync(ctx);
+        return Results.Empty;
+    }
     private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg)
     {
         ctx.Response.Headers.CacheControl = "no-store";
@@ -69,7 +78,7 @@ public static class XtreamEndpoints
                 return Results.Json(await (from c in db.LiveCategories.AsNoTracking()
                     join p in providers on c.ProviderId equals p.Id
                     where c.Active
-                    orderby p.Name, c.Name
+                    orderby p.Priority, p.Id, c.SourceOrder, c.Id
                     select new { category_id = c.Id.ToString(), category_name = p.Name + " - " + c.Name, parent_id = 0 }).ToListAsync(ct));
             case "get_live_streams":
                 if (!string.IsNullOrEmpty(q["category_id"]) && q["category_id"] != "0")
@@ -77,9 +86,9 @@ public static class XtreamEndpoints
                     if (!int.TryParse(q["category_id"], out var cat)) return Results.BadRequest();
                     streams = streams.Where(x => x.c.Id == cat);
                 }
-                return Results.Json(await streams.OrderBy(x => x.s.Id).Select(x => new {
+                return Results.Json(await streams.OrderBy(x => x.p.Priority).ThenBy(x=>x.p.Id).ThenBy(x=>x.c.SourceOrder).ThenBy(x=>x.s.SourceOrder).ThenBy(x => x.s.Id).Select(x => new {
                     num = x.s.Id, name = x.s.Name, stream_type = "live", stream_id = x.s.Id,
-                    stream_icon = "", epg_channel_id = x.s.EpgId, category_id = x.c.Id.ToString(),
+                    stream_icon = "", epg_channel_id = "iptvproxy.raw." + x.s.Id, category_id = x.c.Id.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
                 }).ToListAsync(ct));
             case "get_vod_categories": case "get_vod_streams": case "get_series_categories": case "get_series":

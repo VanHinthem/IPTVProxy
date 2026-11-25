@@ -4,9 +4,11 @@
 @using IPTVProxy.Data
 @using IPTVProxy.Providers
 @inject IDbContextFactory<CatalogDb> Factory
+@inject XmlTvGuide Guide
 <PageTitle>Groepen — IPTVProxy</PageTitle>
 <p><a href="/">Providers</a> · <a href="/channels">Kanalen</a></p>
 <h1>Groepen en publicatie</h1>
+<button disabled="@refreshing" @onclick="RefreshGuide">EPG vernieuwen</button>
 <p>Nieuwe passende kanalen worden automatisch gepubliceerd. Kwaliteit is afgeleid uit bronlabels.</p>
 <label><input type="checkbox" checked="@managed" @onchange="Toggle" /> Samengestelde Xtream-catalogus gebruiken</label>
 <p>Schakel pas om nadat groepen zijn aangemaakt en gecontroleerd. Uitgeschakeld toont de originele providercatalogus.</p>
@@ -27,7 +29,7 @@
         <button @onclick="()=>Bulk(true)">Selecteer zichtbare</button>
         <button @onclick="()=>Bulk(false)">Sluit zichtbare uit</button>
         <button @onclick="()=>Bulk(null)">Herstel automatische selectie (zichtbare)</button>
-        <button @onclick="Alphabetical">Alfabetische volgorde</button>
+        <button @onclick="Alphabetical">Herstel standaardvolgorde</button>
     </div>
     <p>Maximaal 100 rijen per pagina. Zoek ook buiten de automatische groepsfilters om handmatig toe te voegen. Kwaliteits-, provider- en typevoorwaarden blijven gelden.</p>
     <table><thead><tr><th>Publicatie</th><th>Kanaal</th><th>Geselecteerde bron</th><th>Bronnen</th><th>Volgorde</th></tr></thead><tbody>
@@ -65,6 +67,8 @@
 <label><input type="checkbox" @bind="edit.UnknownFallback" /> Onbekende kwaliteit als fallback</label>
 <label><input type="checkbox" @bind="edit.LowerFallback" /> Lagere bekende kwaliteit toestaan</label>
 <label><input type="checkbox" @bind="edit.QualityFirst" /> Kwaliteit vóór providerprioriteit</label>
+<label><input type="checkbox" @bind="edit.ProviderOrder" /> Providervolgorde gebruiken</label>
+<label>Sorteerreferentie <select @bind="edit.SortProviderId"><option value="0">Providerprioriteit</option>@foreach(var p in providers){<option value="@p.Id">@p.Name</option>}</select></label>
 <label>Volgorde <input type="number" @bind="edit.SortOrder" /></label>
 <button @onclick="Save">Opslaan</button><button @onclick="New">Nieuwe groep</button>
 </div>
@@ -104,7 +108,7 @@
             var eligible=ManagedPublication.Eligible(g,c,all,true);
             return new {row=new Row(c.Id,c.Name,ranked.Length>0,membership,o?.Position,ranked.FirstOrDefault()??eligible.FirstOrDefault(),all), automatic=automatic.Length>0};
         }).Where(x=> (search.Length>0 ? x.row.Name.Contains(search,StringComparison.OrdinalIgnoreCase) : x.automatic || x.row.Override is not null || (!g.Automatic && x.row.Sources.Any(s=>string.IsNullOrWhiteSpace(g.Country)||g.Country.Split(',',StringSplitOptions.TrimEntries).Contains(s.Country,StringComparer.OrdinalIgnoreCase)))))
-        .Select(x=>x.row).OrderBy(x=>x.Position??int.MaxValue).ThenBy(x=>x.Name).ThenBy(x=>x.Id).ToList();
+        .Select(x=>x.row).OrderBy(x=>x.Position??int.MaxValue).ThenBy(x=>ManagedPublication.SortKey(g,x.Sources)).ThenBy(x=>x.Name).ThenBy(x=>x.Id).ToList();
         page=0;
     }
     private async Task Set(int id,bool? include)=>await SetMany([id],include);
@@ -151,6 +155,8 @@
         foreach(var o in await db.GroupOverrides.Where(x=>x.GroupId==gid).ToListAsync()){if(o.OrderOnly)db.Remove(o);else o.Position=null;}
         await db.SaveChangesAsync();await ReloadRows();
     }
+    private bool refreshing;
+    private async Task RefreshGuide(){refreshing=true;try{await Guide.RefreshAsync(CancellationToken.None);message="EPG-vernieuwing uitgevoerd; controleer de importlogs.";}finally{refreshing=false;}}
     private string message = "";
     protected override async Task OnInitializedAsync() => await Load();
     private async Task Load()
@@ -161,7 +167,7 @@
         managed = await ManagedPublication.IsEnabled(db, CancellationToken.None);
     }
     private void New() => edit = new();
-    private void Edit(ChannelGroup g) => edit = new ChannelGroup { Id=g.Id, Name=g.Name, Enabled=g.Enabled, Automatic=g.Automatic, Country=g.Country, NameContains=g.NameContains, CategoryContains=g.CategoryContains, ChannelType=g.ChannelType, ProviderId=g.ProviderId, MinimumQuality=g.MinimumQuality, UnknownFallback=g.UnknownFallback, LowerFallback=g.LowerFallback, QualityFirst=g.QualityFirst, SortOrder=g.SortOrder };
+    private void Edit(ChannelGroup g) => edit = new ChannelGroup { Id=g.Id, Name=g.Name, Enabled=g.Enabled, Automatic=g.Automatic, Country=g.Country, NameContains=g.NameContains, CategoryContains=g.CategoryContains, ChannelType=g.ChannelType, ProviderId=g.ProviderId, MinimumQuality=g.MinimumQuality, UnknownFallback=g.UnknownFallback, LowerFallback=g.LowerFallback, QualityFirst=g.QualityFirst, SortOrder=g.SortOrder, ProviderOrder=g.ProviderOrder, SortProviderId=g.SortProviderId };
     private async Task Save()
     {
         if (string.IsNullOrWhiteSpace(edit.Name)) { message="Vul een groepsnaam in."; return; }

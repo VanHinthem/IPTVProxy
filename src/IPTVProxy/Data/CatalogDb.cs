@@ -52,6 +52,7 @@ public sealed class LiveStream
     public string EpgId { get; set; } = "";
     public string Logo { get; set; } = "";
     public bool Active { get; set; } = true;
+    public int SourceOrder { get; set; } = int.MaxValue;
 }
 
 public sealed class LiveCategory
@@ -61,6 +62,7 @@ public sealed class LiveCategory
     public string SourceId { get; set; } = "";
     public string Name { get; set; } = "";
     public bool Active { get; set; } = true;
+    public int SourceOrder { get; set; } = int.MaxValue;
 }
 
 public sealed class LogicalChannel
@@ -108,6 +110,8 @@ public sealed class ChannelGroup
     public bool UnknownFallback { get; set; } = true;
     public bool LowerFallback { get; set; }
     public bool QualityFirst { get; set; }
+    public int SortProviderId { get; set; }
+    public bool ProviderOrder { get; set; } = true;
     public int SortOrder { get; set; }
 }
 public sealed class GroupOverride

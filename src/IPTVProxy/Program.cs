@@ -23,6 +23,8 @@ builder.Services.AddSingleton<LiveCatalog>();
 builder.Services.AddHostedService<CatalogRefresh>();
 builder.Services.AddSingleton<LivePlayback>();
 builder.Services.AddSingleton<ProviderEpg>();
+builder.Services.AddSingleton<XmlTvGuide>();
+builder.Services.AddHostedService<XmlTvRefresh>();
 builder.Services.AddHttpClient("provider", c => {
     c.Timeout = Timeout.InfiniteTimeSpan;
     c.MaxResponseContentBufferSize = 64 * 1024 * 1024;

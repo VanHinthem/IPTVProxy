@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true, bool classification = true, bool ordering = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true, bool classification = true, bool ordering = true, bool sourceOrdering = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -72,6 +72,7 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             if (managedChannels) { e.Property(x => x.EpgId).IsRequired(); e.Property(x => x.Logo).IsRequired(); }
             else { e.Ignore(x => x.EpgId); e.Ignore(x => x.Logo); }
             e.Property(x => x.Active);
+            if(sourceOrdering)e.Property(x=>x.SourceOrder);else e.Ignore(x=>x.SourceOrder);
             e.HasIndex(x => new { x.ProviderId, x.SourceId }).IsUnique();
             e.HasOne<Provider>().WithMany().HasForeignKey(x => x.ProviderId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -83,6 +84,7 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             e.Property(x => x.SourceId).IsRequired();
             e.Property(x => x.Name).IsRequired();
             e.Property(x => x.Active);
+            if(sourceOrdering)e.Property(x=>x.SourceOrder);else e.Ignore(x=>x.SourceOrder);
             e.HasIndex(x => new { x.ProviderId, x.SourceId }).IsUnique();
             e.HasOne<Provider>().WithMany().HasForeignKey(x => x.ProviderId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -133,6 +135,7 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
                 e.Property(x => x.Enabled); e.Property(x => x.Automatic);
                 e.Property(x => x.ProviderId); e.Property(x => x.MinimumQuality);
                 e.Property(x => x.UnknownFallback); e.Property(x => x.LowerFallback);
+                if(sourceOrdering){e.Property(x=>x.SortProviderId);e.Property(x=>x.ProviderOrder);}else{e.Ignore(x=>x.SortProviderId);e.Ignore(x=>x.ProviderOrder);}
                 e.Property(x => x.QualityFirst); e.Property(x => x.SortOrder);
             });
             model.Entity<GroupOverride>(e => {

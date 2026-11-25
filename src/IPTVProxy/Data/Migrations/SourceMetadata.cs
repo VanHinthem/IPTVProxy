@@ -18,5 +18,5 @@ public sealed class SourceMetadata : Migration
         migrationBuilder.DropColumn("Tags","ChannelSources");
         migrationBuilder.DropColumn("Separator","ChannelSources");
     }
-    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder, true, true, true, true, true, false, false);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder, true, true, true, true, true, false, false, false);
 }

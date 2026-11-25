@@ -8,5 +8,5 @@ public sealed class ClassificationRefinement : Migration
 {
     protected override void Up(MigrationBuilder m) { }
     protected override void Down(MigrationBuilder m) { }
-    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder, true, true, true, true, true, true, false);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder, true, true, true, true, true, true, false, false);
 }
