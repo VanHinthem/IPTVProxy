@@ -2,6 +2,8 @@
 @using Microsoft.AspNetCore.Components.Web
 @using Microsoft.EntityFrameworkCore
 @using IPTVProxy.Data
+@using IPTVProxy.Providers
+@inject ArtworkService Artwork
 @inject IDbContextFactory<CatalogDb> Factory
 <PageTitle>Kanalen — IPTVProxy</PageTitle>
 <p><a href="/">Providers</a> · <a href="/groups">Groepen</a></p>
@@ -13,10 +15,10 @@
 <label><input type="checkbox" @bind="multiple" /> Meerdere bronnen</label>
 <label><input type="checkbox" @bind="review" /> Alleen te beoordelen</label>
 <button @onclick="Search">Zoeken</button>
-<table><thead><tr><th>ID</th><th>Naam</th><th>Land</th><th>Bronnen</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>ID</th><th>Logo / naam</th><th>Land</th><th>Bronnen</th><th></th></tr></thead><tbody>
 @foreach(var c in rows)
 {
-    <tr><td>@c.Id</td><td>@c.Name</td><td>@c.Country</td><td>@c.Count</td><td><button @onclick="() => Details(c.Id)">Bronnen</button></td></tr>
+    <tr><td>@c.Id</td><td><img src="@Artwork.ChannelUrl(c.Id)" loading="lazy" alt="" width="40" height="28" style="object-fit:contain;vertical-align:middle" /> @c.Name</td><td>@c.Country</td><td>@c.Count</td><td><button @onclick="() => Details(c.Id)">Bronnen</button></td></tr>
 }
 </tbody></table>
 <button disabled="@(page == 0)" @onclick="Previous">Vorige</button> Pagina @(page + 1) <button disabled="@(rows.Count < 100)" @onclick="Next">Volgende</button>
@@ -25,6 +27,7 @@
     <h2>Bronstreams voor kanaal @selected</h2>
     <p>Voorkeursbron: @(preferred == 0 ? "Automatisch" : preferred.ToString()) <button @onclick="() => Prefer(0)">Automatisch</button></p>
     <label>Naam <input @bind="channelName" /></label><button @onclick="Rename">Naam opslaan</button>
+    <div><img src="@Artwork.ChannelUrl(selected)" alt="Zenderlogo" width="80" height="50" style="object-fit:contain;vertical-align:middle" /><label>Logo-URL (leeg = automatisch) <input @bind="logoOverride" maxlength="2048" /></label><button @onclick="SaveLogo">Logo opslaan</button></div>
     <table><thead><tr><th>Provider</th><th>Originele naam</th><th>Kwaliteit (label)</th><th>Review</th></tr></thead><tbody>
     @foreach(var s in details)
     {
@@ -52,7 +55,8 @@
     private int multiCount;
     private int standaloneCount;
     private int page,total,sourceCount,reviewCount,selected,groupId,targetId,preferred;
-    private string channelName="";
+    private string channelName="",logoOverride="";
+    private async Task SaveLogo(){try{await Artwork.SetOverrideAsync(selected,logoOverride,CancellationToken.None);message="Logo opgeslagen (clientcache kan nog maximaal een uur actief zijn).";}catch(ArgumentException ex){message=ex.Message;}catch{message="Logo opslaan mislukt.";}}
     protected override async Task OnInitializedAsync() => await Load();
     private async Task Search(){page=0;await Load();}
     private async Task Previous(){if(page>0)page--;await Load();}
@@ -79,7 +83,7 @@
         selected=id;
         await using var db=await Factory.CreateDbContextAsync();
         var channel=await db.LogicalChannels.AsNoTracking().SingleAsync(x=>x.Id==id);
-        preferred=channel.PreferredStreamId;channelName=channel.Name;
+        preferred=channel.PreferredStreamId;channelName=channel.Name;logoOverride=await Artwork.GetOverrideAsync(id,CancellationToken.None);
         details=await (from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id where l.LogicalChannelId==id && s.Active orderby p.Priority, l.Quality descending select new Source(s.Id,p.Name,s.Name,l.Quality,l.ReviewRequired)).Take(500).ToListAsync();
     }
     private async Task Prefer(int id)

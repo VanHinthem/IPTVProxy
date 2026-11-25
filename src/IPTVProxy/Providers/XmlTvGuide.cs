@@ -8,7 +8,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace IPTVProxy.Providers;
-public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog catalog,IHttpClientFactory clients,ILogger<XmlTvGuide> log,IConfiguration config)
+public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog catalog,IHttpClientFactory clients,ILogger<XmlTvGuide> log,IConfiguration config,ArtworkService artwork)
 {
     private readonly SemaphoreSlim gate=new(1,1);
     private readonly SemaphoreSlim publicationGate=new(1,1);
@@ -52,7 +52,7 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         input.Position=0;
         using var decoded=input.Length>=2&&input.GetBuffer()[0]==0x1f&&input.GetBuffer()[1]==0x8b?(Stream)new GZipStream(input,CompressionMode.Decompress):input;
         using var reader=XmlReader.Create(decoded,new XmlReaderSettings{DtdProcessing=DtdProcessing.Ignore,XmlResolver=null,MaxCharactersInDocument=256L*1024*1024});
-        var entries=new List<(string Id,string Start,string Stop,string Title,string Description)>();
+        var entries=new List<(string Id,string Start,string Stop,string Title,string Description,string Artwork)>();
         var now=DateTimeOffset.UtcNow;
         reader.MoveToContent();if(reader.LocalName!="tv")throw new InvalidDataException("Invalid XMLTV");
         while(!reader.EOF)
@@ -65,9 +65,10 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
                 var start=Time((string?)e.Attribute("start"));var stop=Time((string?)e.Attribute("stop"));
                 var title=e.Elements().FirstOrDefault(x=>x.Name.LocalName=="title")?.Value??"";
                 var desc=e.Elements().FirstOrDefault(x=>x.Name.LocalName=="desc")?.Value??"";
+                var image=e.Elements().Where(x=>x.Name.LocalName is "icon" or "image").Select(x=>(string?)x.Attribute("src")??x.Value).FirstOrDefault(ArtworkService.ValidUrl)??"";
                 if(id.Length is >0 and <=512&&start is not null&&stop is not null&&stop>start&&stop>now.AddDays(-1)&&start<now.AddDays(8)&&title.Length>0)
                 {
-                    entries.Add((id,start.Value.ToString("O"),stop.Value.ToString("O"),title[..Math.Min(title.Length,2048)],desc[..Math.Min(desc.Length,16384)]));
+                    entries.Add((id,start.Value.ToString("O"),stop.Value.ToString("O"),title[..Math.Min(title.Length,2048)],desc[..Math.Min(desc.Length,16384)],image));
                     if(entries.Count>500000)throw new InvalidDataException("XMLTV programme limit exceeded");
                 }
                 continue;
@@ -81,18 +82,18 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         await using var tx=(SqliteTransaction)await connection.BeginTransactionAsync(token);
         await using var cmd=connection.CreateCommand();cmd.Transaction=tx;
         cmd.CommandText="DELETE FROM EpgPrograms WHERE ProviderId=$p";cmd.Parameters.AddWithValue("$p",p.Id);await cmd.ExecuteNonQueryAsync(token);
-        cmd.CommandText="INSERT OR REPLACE INTO EpgPrograms VALUES($p,$id,$start,$stop,$title,$desc)";
-        foreach(var key in new[]{"$id","$start","$stop","$title","$desc"})cmd.Parameters.AddWithValue(key,"");
+        cmd.CommandText="INSERT OR REPLACE INTO EpgPrograms(ProviderId,EpgId,Start,Stop,Title,Description,Artwork) VALUES($p,$id,$start,$stop,$title,$desc,$art)";
+        foreach(var key in new[]{"$id","$start","$stop","$title","$desc","$art"})cmd.Parameters.AddWithValue(key,"");
         foreach(var e in entries)
         {
-            token.ThrowIfCancellationRequested();cmd.Parameters["$id"].Value=e.Id;cmd.Parameters["$start"].Value=e.Start;cmd.Parameters["$stop"].Value=e.Stop;cmd.Parameters["$title"].Value=e.Title;cmd.Parameters["$desc"].Value=e.Description;
+            token.ThrowIfCancellationRequested();cmd.Parameters["$id"].Value=e.Id;cmd.Parameters["$start"].Value=e.Start;cmd.Parameters["$stop"].Value=e.Stop;cmd.Parameters["$title"].Value=e.Title;cmd.Parameters["$desc"].Value=e.Description;cmd.Parameters["$art"].Value=e.Artwork;
             await cmd.ExecuteNonQueryAsync(token);
         }
         cmd.Parameters.Clear();cmd.CommandText="INSERT OR REPLACE INTO EpgRefreshState VALUES($p,$updated,$count)";
         cmd.Parameters.AddWithValue("$p",p.Id);cmd.Parameters.AddWithValue("$updated",now.ToString("O"));cmd.Parameters.AddWithValue("$count",entries.Count);await cmd.ExecuteNonQueryAsync(token);
         await tx.CommitAsync(token);
         Invalidate();
-        log.LogInformation("XMLTV imported for provider {ProviderId}: {Count} programmes",p.Id,entries.Count);
+        log.LogInformation("XMLTV imported for provider {ProviderId}: {Count} programmes, {ArtworkCount} with artwork",p.Id,entries.Count,entries.Count(e=>e.Artwork!=""));
     }
     private async Task<HttpResponseMessage> FetchAsync(HttpClient client,Uri uri,int providerId,CancellationToken ct)
     {
@@ -252,18 +253,21 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         }
         return map;
     }
-    private static async Task GenerateAsync(CatalogDb db,List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)> map,Stream output,CancellationToken ct)
+    private async Task GenerateAsync(CatalogDb db,List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)> map,Stream output,CancellationToken ct)
     {
         await db.Database.OpenConnectionAsync(ct);
         var connection=(SqliteConnection)db.Database.GetDbConnection();
         await using var command=connection.CreateCommand();
-        command.CommandText="SELECT Start,Stop,Title,Description FROM EpgPrograms WHERE ProviderId=$p AND EpgId=$id AND Stop>$now ORDER BY Start";
+        command.CommandText="SELECT Start,Stop,Title,Description,Artwork FROM EpgPrograms WHERE ProviderId=$p AND EpgId=$id AND Stop>$now ORDER BY Start";
         command.Parameters.AddWithValue("$p",0);command.Parameters.AddWithValue("$id","");command.Parameters.AddWithValue("$now",DateTimeOffset.UtcNow.AddHours(-6).ToString("O"));
         using var writer=XmlWriter.Create(output,new XmlWriterSettings{Async=true,Encoding=new UTF8Encoding(false),CloseOutput=false});
         await writer.WriteStartDocumentAsync();await writer.WriteStartElementAsync(null,"tv",null);
         foreach(var item in map)
         {
-            await writer.WriteStartElementAsync(null,"channel",null);await writer.WriteAttributeStringAsync(null,"id",null,item.Id);await writer.WriteElementStringAsync(null,"display-name",null,item.Name);await writer.WriteEndElementAsync();
+            await writer.WriteStartElementAsync(null,"channel",null);await writer.WriteAttributeStringAsync(null,"id",null,item.Id);await writer.WriteElementStringAsync(null,"display-name",null,item.Name);
+            var raw=item.Id.StartsWith("iptvproxy.raw.",StringComparison.Ordinal);
+            if(int.TryParse(item.Id.AsSpan(raw?14:10),out var id)){await writer.WriteStartElementAsync(null,"icon",null);await writer.WriteAttributeStringAsync(null,"src",null,artwork.ChannelUrl(id,raw));await writer.WriteEndElementAsync();}
+            await writer.WriteEndElementAsync();
         }
         foreach(var item in map)
         {
@@ -279,7 +283,9 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
                     await writer.WriteAttributeStringAsync(null,"start",null,DateTimeOffset.Parse(rows.GetString(0),CultureInfo.InvariantCulture).ToUniversalTime().ToString("yyyyMMddHHmmss '+0000'"));
                     await writer.WriteAttributeStringAsync(null,"stop",null,DateTimeOffset.Parse(rows.GetString(1),CultureInfo.InvariantCulture).ToUniversalTime().ToString("yyyyMMddHHmmss '+0000'"));
                     await writer.WriteElementStringAsync(null,"title",null,rows.GetString(2));
-                    await writer.WriteElementStringAsync(null,"desc",null,rows.GetString(3));await writer.WriteEndElementAsync();
+                    await writer.WriteElementStringAsync(null,"desc",null,rows.GetString(3));
+                    var image=artwork.ProgrammeUrl(rows.GetString(4));if(image!=""){await writer.WriteStartElementAsync(null,"icon",null);await writer.WriteAttributeStringAsync(null,"src",null,image);await writer.WriteEndElementAsync();}
+                    await writer.WriteEndElementAsync();
                 }
                 if(found)break;
             }

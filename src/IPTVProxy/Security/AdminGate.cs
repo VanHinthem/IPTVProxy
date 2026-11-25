@@ -11,7 +11,7 @@ public static class AdminGate
         var endpoint = ctx.GetEndpoint() as RouteEndpoint;
         var route = endpoint?.RoutePattern.RawText;
         if (route is "/health" or "/player_api.php" or "/xmltv.php" or "/live/{username}/{password}/{id:int}.ts"
-            or "/live/{username}/{password}/{id:int}" or "/{username}/{password}/{id:int}")
+            or "/artwork/{kind}/{id:int}/{signature}" or "/artwork/programme/{token}" or "/live/{username}/{password}/{id:int}" or "/{username}/{password}/{id:int}")
         { await next(); return; }
 
         ctx.Response.Headers.CacheControl = "no-store";

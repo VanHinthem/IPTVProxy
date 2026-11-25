@@ -23,6 +23,7 @@ builder.Services.AddSingleton<LiveCatalog>();
 builder.Services.AddHostedService<CatalogRefresh>();
 builder.Services.AddSingleton<LivePlayback>();
 builder.Services.AddSingleton<ProviderEpg>();
+builder.Services.AddSingleton<ArtworkService>();
 builder.Services.AddSingleton<XmlTvGuide>();
 builder.Services.AddHostedService<XmlTvRefresh>();
 builder.Services.AddHttpClient("provider", c => {
@@ -34,8 +35,9 @@ builder.Services.AddRateLimiter(options => {
     options.AddPolicy("xtream", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    options.AddPolicy("artwork", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString()??"unknown", _=>new FixedWindowRateLimiterOptions{PermitLimit=1200,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
-        RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        ctx.Request.Path.StartsWithSegments("/artwork") ? RateLimitPartition.GetNoLimiter("artwork") : RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             _ => new FixedWindowRateLimiterOptions { PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 var app = builder.Build();

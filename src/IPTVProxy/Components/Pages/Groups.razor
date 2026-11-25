@@ -5,6 +5,7 @@
 @using IPTVProxy.Providers
 @inject IDbContextFactory<CatalogDb> Factory
 @inject XmlTvGuide Guide
+@inject ArtworkService Artwork
 <PageTitle>Groepen — IPTVProxy</PageTitle>
 <p><a href="/">Providers</a> · <a href="/channels">Kanalen</a></p>
 <h1>Groepen en publicatie</h1>
@@ -39,7 +40,7 @@
     @foreach(var r in Visible())
     {
         <tr @ondragover:preventDefault @ondrop="()=>DropChannel(r.Id)"><td><span draggable="@r.Selected.ToString().ToLowerInvariant()" @ondragstart="()=>dragChannel=r.Id" title="Sleep kanaal" style="cursor:grab">⠿</span> <input type="checkbox" checked="@r.Selected" @onchange="e=>Set(r.Id,e.Value is true)" /><button @onclick="()=>Set(r.Id,null)">Auto</button></td>
-        <td>@r.Name @if(r.Override is not null){<small> (handmatig)</small>}</td>
+        <td><img src="@Artwork.ChannelUrl(r.Id)" loading="lazy" alt="" width="40" height="28" style="object-fit:contain;vertical-align:middle" /> @r.Name @if(r.Override is not null){<small> (handmatig)</small>}</td>
         <td>@(r.Best is null?"Niet publiceerbaar":ProviderName(r.Best.ProviderId)+" / "+Quality(r.Best.Quality))</td>
         <td><button @onclick="()=>expanded=expanded==r.Id?0:r.Id">@r.Sources.Length bronnen</button></td>
         <td><button disabled="@(!r.Selected)" @onclick="()=>Move(r.Id,-1)">↑</button> <button disabled="@(!r.Selected)" @onclick="()=>Move(r.Id,1)">↓</button></td></tr>

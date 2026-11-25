@@ -9,6 +9,8 @@ public static class XtreamEndpoints
 {
     public static void MapXtream(this WebApplication app)
     {
+        app.MapGet("/artwork/{kind}/{id:int}/{signature}", ChannelArtwork).RequireRateLimiting("artwork");
+        app.MapGet("/artwork/programme/{token}", ProgrammeArtwork).RequireRateLimiting("artwork");
         app.MapGet("/xmltv.php", XmlTv).RequireRateLimiting("xtream");
         app.MapGet("/player_api.php", Api).RequireRateLimiting("xtream");
         app.MapGet("/live/{username}/{password}/{id:int}.ts", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");
@@ -16,6 +18,18 @@ public static class XtreamEndpoints
         app.MapGet("/{username}/{password}/{id:int}", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");
     }
 
+    private static async Task<IResult> ChannelArtwork(HttpContext ctx,string kind,int id,string signature,ArtworkService artwork)
+        =>ImageResult(ctx,await artwork.ChannelAsync(kind,id,signature,ctx.RequestAborted));
+    private static async Task<IResult> ProgrammeArtwork(HttpContext ctx,string token,ArtworkService artwork)
+        =>ImageResult(ctx,await artwork.ProgrammeAsync(token,ctx.RequestAborted));
+    private static IResult ImageResult(HttpContext ctx,ArtworkService.Image? image)
+    {
+        if(image is null)return Results.NotFound();
+        ctx.Response.Headers.CacheControl=image.ContentType=="image/svg+xml"?"private, max-age=300":"private, max-age=3600";
+        ctx.Response.Headers["X-Content-Type-Options"]="nosniff";
+        ctx.Response.Headers["Content-Security-Policy"]="default-src 'none'; sandbox";
+        return Results.File(image.Bytes,image.ContentType);
+    }
     private static async Task<IResult> XmlTv(HttpContext ctx,LocalAccounts accounts,XmlTvGuide guide)
     {
         var q=ctx.Request.Query;
@@ -25,7 +39,7 @@ public static class XtreamEndpoints
         if(file is null)return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         return Results.File(file,"application/xml; charset=utf-8",enableRangeProcessing:false);
     }
-    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide)
+    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork)
     {
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
@@ -56,7 +70,7 @@ public static class XtreamEndpoints
                 var published = await ManagedPublication.ListAsync(db, groupId, ct);
                 return Results.Json(published.Select((x,i) => new {
                     num = i + 1, name = x.Name, stream_type = "live", stream_id = x.Id,
-                    stream_icon = "", epg_channel_id = "iptvproxy." + x.ChannelId, category_id = x.GroupId.ToString(),
+                    stream_icon = artwork.ChannelUrl(x.ChannelId), epg_channel_id = "iptvproxy." + x.ChannelId, category_id = x.GroupId.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
                 }));
             }
@@ -87,11 +101,11 @@ public static class XtreamEndpoints
                     if (!int.TryParse(q["category_id"], out var cat)) return Results.BadRequest();
                     streams = streams.Where(x => x.c.Id == cat);
                 }
-                return Results.Json(await streams.OrderBy(x => x.p.Priority).ThenBy(x=>x.p.Id).ThenBy(x=>x.c.SourceOrder).ThenBy(x=>x.s.SourceOrder).ThenBy(x => x.s.Id).Select(x => new {
+                return Results.Json((await streams.OrderBy(x => x.p.Priority).ThenBy(x=>x.p.Id).ThenBy(x=>x.c.SourceOrder).ThenBy(x=>x.s.SourceOrder).ThenBy(x => x.s.Id).Select(x => new {
                     num = x.s.Id, name = x.s.Name, stream_type = "live", stream_id = x.s.Id,
-                    stream_icon = "", epg_channel_id = "iptvproxy.raw." + x.s.Id, category_id = x.c.Id.ToString(),
+                    epg_channel_id = "iptvproxy.raw." + x.s.Id, category_id = x.c.Id.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
-                }).ToListAsync(ct));
+                }).ToListAsync(ct)).Select(x=>new {x.num,x.name,x.stream_type,x.stream_id,stream_icon=artwork.ChannelUrl(x.stream_id,true),x.epg_channel_id,x.category_id,x.tv_archive,x.tv_archive_duration,x.direct_source}));
             case "get_vod_categories": case "get_vod_streams": case "get_series_categories": case "get_series":
                 return Results.Json(Array.Empty<object>());
             case "get_short_epg": case "get_simple_data_table":
