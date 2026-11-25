@@ -20,7 +20,12 @@ builder.Services.AddDbContextFactory<CatalogDb>(options => options.UseSqlite(new
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddSingleton<LocalAccounts>();
 builder.Services.AddSingleton<LiveCatalog>();
+builder.Services.AddHostedService<CatalogRefresh>();
 builder.Services.AddSingleton<LivePlayback>();
+builder.Services.AddSingleton<ProviderEpg>();
+builder.Services.AddSingleton<ArtworkService>();
+builder.Services.AddSingleton<XmlTvGuide>();
+builder.Services.AddHostedService<XmlTvRefresh>();
 builder.Services.AddHttpClient("provider", c => {
     c.Timeout = Timeout.InfiniteTimeSpan;
     c.MaxResponseContentBufferSize = 64 * 1024 * 1024;
@@ -30,8 +35,9 @@ builder.Services.AddRateLimiter(options => {
     options.AddPolicy("xtream", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    options.AddPolicy("artwork", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString()??"unknown", _=>new FixedWindowRateLimiterOptions{PermitLimit=1200,Window=TimeSpan.FromMinutes(1),QueueLimit=0}));
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
-        RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        ctx.Request.Path.StartsWithSegments("/artwork") ? RateLimitPartition.GetNoLimiter("artwork") : RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             _ => new FixedWindowRateLimiterOptions { PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 var app = builder.Build();
@@ -42,8 +48,22 @@ if (origin.Scheme is not ("http" or "https") || origin.UserInfo.Length != 0 || o
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CatalogDb>();
+    var pending = await db.Database.GetPendingMigrationsAsync();
+    var rematch = pending.Contains("202611250005_SourceMetadata") || pending.Contains("202611250006_SourceClassification") || pending.Contains("202611250007_ClassificationRefinement");
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
+    if (rematch && !await ManagedPublication.IsEnabled(db, CancellationToken.None))
+    {
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await ChannelMatching.RematchAsync(db, CancellationToken.None);
+        await tx.CommitAsync();
+    }
+    if (await db.LiveStreams.AnyAsync(x => x.Active && !db.ChannelSources.Any(l => l.LiveStreamId == x.Id)))
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        await ChannelMatching.ReconcileAsync(db, CancellationToken.None);
+        await transaction.CommitAsync();
+    }
 }
 app.UseRouting();
 app.UseRateLimiter();

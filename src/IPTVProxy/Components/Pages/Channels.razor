@@ -1,0 +1,158 @@
+@page "/channels"
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.EntityFrameworkCore
+@using IPTVProxy.Data
+@using IPTVProxy.Providers
+@inject ArtworkService Artwork
+@inject IDbContextFactory<CatalogDb> Factory
+<PageTitle>Kanalen — IPTVProxy</PageTitle>
+<p><a href="/">Providers</a> · <a href="/groups">Groepen</a></p>
+<h1>Logische kanalen</h1>
+<div class="summary"><span><strong>@total</strong> actieve logische kanalen</span><span><strong>@sourceCount</strong> actieve bronstreams</span><span><strong>@multiCount</strong> kanalen met meerdere bronnen</span><span><strong>@reviewCount</strong> bronkoppelingen ter beoordeling</span><span><strong>@standaloneCount</strong> bewust zelfstandige bronnen (event/24/7/scheiding)</span></div>
+<p><a href="/diagnostics">Matchingdiagnostiek per provider en categorie</a></p>
+<label>Zoeken <input @bind="search" /></label>
+<label>Land <select @bind="country"><option value="">Alle</option><option value="?">Onbekend</option>@foreach(var c in countries){<option value="@c">@c</option>}</select></label>
+<label><input type="checkbox" @bind="multiple" /> Meerdere bronnen</label>
+<label><input type="checkbox" @bind="review" /> Alleen te beoordelen</label>
+<button @onclick="Search">Zoeken</button>
+<table><thead><tr><th>ID</th><th>Logo / naam</th><th>Land</th><th>Bronnen</th><th></th></tr></thead><tbody>
+@foreach(var c in rows)
+{
+    <tr><td>@c.Id</td><td><img src="@Artwork.ChannelUrl(c.Id)" loading="lazy" alt="" width="40" height="28" style="object-fit:contain;vertical-align:middle" /> @c.Name</td><td>@c.Country</td><td>@c.Count</td><td><button @onclick="() => Details(c.Id)">Bronnen</button></td></tr>
+}
+</tbody></table>
+<button disabled="@(page == 0)" @onclick="Previous">Vorige</button> Pagina @(page + 1) <button disabled="@(rows.Count < 100)" @onclick="Next">Volgende</button>
+@if (selected != 0)
+{
+    <h2>Bronstreams voor kanaal @selected</h2>
+    <p>Voorkeursbron: @(preferred == 0 ? "Automatisch" : preferred.ToString()) <button @onclick="() => Prefer(0)">Automatisch</button></p>
+    <label>Naam <input @bind="channelName" /></label><button @onclick="Rename">Naam opslaan</button>
+    <div><img src="@Artwork.ChannelUrl(selected)" alt="Zenderlogo" width="80" height="50" style="object-fit:contain;vertical-align:middle" /><label>Logo-URL (leeg = automatisch) <input @bind="logoOverride" maxlength="2048" /></label><button @onclick="SaveLogo">Logo opslaan</button></div>
+    <table><thead><tr><th>Provider</th><th>Originele naam</th><th>Kwaliteit (label)</th><th>Review</th></tr></thead><tbody>
+    @foreach(var s in details)
+    {
+        <tr><td>@s.Provider</td><td>@s.Name</td><td>@s.Quality</td><td>@s.Review <button @onclick="() => Prefer(s.Id)">Voorkeur</button> <button @onclick="() => Confirm(s.Id)">Bevestigen</button> <button @onclick="() => Split(s.Id)">Splitsen</button></td></tr>
+    }
+    </tbody></table>
+    <label>Doelkanaal-ID <input type="number" @bind="targetId" /></label>
+    <button @onclick="Merge">Samenvoegen met doelkanaal</button>
+    <label>Groep <select @bind="groupId"><option value="0">Kies groep</option>@foreach(var g in groups){<option value="@g.Id">@g.Name</option>}</select></label>
+    <button @onclick="() => Override(true)">Toevoegen</button>
+    <button @onclick="() => Override(false)">Uitsluiten</button>
+    <button @onclick="() => Override(null)">Automatisch</button>
+}
+<p role="status">@message</p>
+@code {
+    private record Row(int Id,string Name,string Country,int Count);
+    private record Source(int Id,string Provider,string Name,int Quality,bool Review);
+    private List<Row> rows = [];
+    private List<Source> details = [];
+    private List<ChannelGroup> groups = [];
+    private string search="", message="";
+    private bool review,multiple;
+    private string country="";
+    private List<string> countries=[];
+    private int multiCount;
+    private int standaloneCount;
+    private int page,total,sourceCount,reviewCount,selected,groupId,targetId,preferred;
+    private string channelName="",logoOverride="";
+    private async Task SaveLogo(){try{await Artwork.SetOverrideAsync(selected,logoOverride,CancellationToken.None);message="Logo opgeslagen (clientcache kan nog maximaal een uur actief zijn).";}catch(ArgumentException ex){message=ex.Message;}catch{message="Logo opslaan mislukt.";}}
+    protected override async Task OnInitializedAsync() => await Load();
+    private async Task Search(){page=0;await Load();}
+    private async Task Previous(){if(page>0)page--;await Load();}
+    private async Task Next(){page++;await Load();}
+    private async Task Load()
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        var activeLinks=from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id where s.Active select l;
+        sourceCount=await db.LiveStreams.CountAsync(x=>x.Active);
+        reviewCount=await activeLinks.CountAsync(x=>x.ReviewRequired);
+        standaloneCount=await activeLinks.CountAsync(x=>x.ChannelType=="Event" || x.ChannelType=="Loop" || x.ChannelType=="Separator");
+        total=await activeLinks.Select(l=>l.LogicalChannelId).Distinct().CountAsync();
+        multiCount=await activeLinks.GroupBy(l=>l.LogicalChannelId).Where(g=>g.Count()>1).CountAsync();
+        countries=await activeLinks.Select(l=>l.Country).Where(c=>c!="").Distinct().OrderBy(c=>c).ToListAsync();
+        var q=db.LogicalChannels.AsNoTracking().Where(c=>c.Name.Contains(search) && activeLinks.Any(l=>l.LogicalChannelId==c.Id));
+        if(country!="")q=q.Where(c=>c.Country==(country=="?"?"":country));
+        if(multiple)q=q.Where(c=>activeLinks.Count(l=>l.LogicalChannelId==c.Id)>1);
+        if(review)q=q.Where(c=>activeLinks.Any(l=>l.LogicalChannelId==c.Id && l.ReviewRequired));
+        rows=await q.OrderBy(c=>c.Name).ThenBy(c=>c.Id).Skip(page*100).Take(100).Select(c=>new Row(c.Id,c.Name,c.Country,activeLinks.Count(l=>l.LogicalChannelId==c.Id))).ToListAsync();
+        groups=await db.ChannelGroups.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+    }
+    private async Task Details(int id)
+    {
+        selected=id;
+        await using var db=await Factory.CreateDbContextAsync();
+        var channel=await db.LogicalChannels.AsNoTracking().SingleAsync(x=>x.Id==id);
+        preferred=channel.PreferredStreamId;channelName=channel.Name;logoOverride=await Artwork.GetOverrideAsync(id,CancellationToken.None);
+        details=await (from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id where l.LogicalChannelId==id && s.Active orderby p.Priority, l.Quality descending select new Source(s.Id,p.Name,s.Name,l.Quality,l.ReviewRequired)).Take(500).ToListAsync();
+    }
+    private async Task Prefer(int id)
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        if(id!=0 && !await db.ChannelSources.AnyAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected))return;
+        var channel=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
+        channel.PreferredStreamId=id;await db.SaveChangesAsync();await Details(selected);
+    }
+    private async Task Rename()
+    {
+        if(string.IsNullOrWhiteSpace(channelName))return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var channel=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
+        channel.Name=channelName.Trim();await db.SaveChangesAsync();await Load();
+    }
+    private async Task Confirm(int id)
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        var link=await db.ChannelSources.SingleAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected);
+        link.Manual=true;link.ReviewRequired=false;
+        await db.SaveChangesAsync();await Details(selected);await Load();
+    }
+    private async Task Split(int id)
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        var link=await db.ChannelSources.SingleAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected);
+        var old=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
+        if(await db.ChannelSources.CountAsync(x=>x.LogicalChannelId==selected)<=1){message="Dit kanaal heeft slechts één bron.";return;}
+        old.Manual=true;
+        if(old.PreferredStreamId==id)old.PreferredStreamId=0;
+        var split=new LogicalChannel{Name=link.NormalizedName,Country=link.Country,MatchKey=old.MatchKey,Manual=true};
+        link.LogicalChannel=split;
+        link.Manual=true;link.ReviewRequired=false;
+        await using var tx=await db.Database.BeginTransactionAsync();
+        await db.SaveChangesAsync();
+        foreach(var ov in await db.GroupOverrides.AsNoTracking().Where(x=>x.ChannelId==selected).ToListAsync())
+            db.GroupOverrides.Add(new GroupOverride{GroupId=ov.GroupId,ChannelId=split.Id,Include=ov.Include});
+        await db.SaveChangesAsync();await tx.CommitAsync();await Details(selected);await Load();
+    }
+    private async Task Merge()
+    {
+        if(targetId<=0 || targetId==selected)return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var target=await db.LogicalChannels.FindAsync(targetId);
+        var old=await db.LogicalChannels.FindAsync(selected);
+        if(target is null || old is null){message="Doelkanaal niet gevonden.";return;}
+        old.Manual=true;target.Manual=true;
+        if(target.PreferredStreamId==0)target.PreferredStreamId=old.PreferredStreamId;
+        old.PreferredStreamId=0;
+        var targetOverrides=await db.GroupOverrides.Where(x=>x.ChannelId==targetId).ToDictionaryAsync(x=>x.GroupId);
+        foreach(var ov in await db.GroupOverrides.Where(x=>x.ChannelId==selected).ToListAsync())
+        {
+            if(!targetOverrides.ContainsKey(ov.GroupId))db.GroupOverrides.Add(new GroupOverride{GroupId=ov.GroupId,ChannelId=targetId,Include=ov.Include});
+            // Existing target override wins; retain old override on old channel for audit.
+        }
+        foreach(var link in await db.ChannelSources.Where(x=>x.LogicalChannelId==selected).ToListAsync())
+        {link.LogicalChannelId=targetId;link.Manual=true;link.ReviewRequired=false;}
+        await db.SaveChangesAsync();message="Bronnen verplaatst; groepsuitzonderingen overgenomen tenzij het doel al een uitzondering heeft.";
+        await Details(targetId);await Load();
+    }
+    private async Task Override(bool? include)
+    {
+        if(groupId==0 || selected==0)return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var row=await db.GroupOverrides.SingleOrDefaultAsync(x=>x.GroupId==groupId && x.ChannelId==selected);
+        if(include is null){if(row is not null)db.GroupOverrides.Remove(row);}
+        else if(row is null)db.GroupOverrides.Add(new GroupOverride{GroupId=groupId,ChannelId=selected,Include=include.Value});
+        else row.Include=include.Value;
+        await db.SaveChangesAsync();message="Groepsuitzondering opgeslagen.";
+    }
+}

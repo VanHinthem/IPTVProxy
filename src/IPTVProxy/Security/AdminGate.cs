@@ -10,8 +10,8 @@ public static class AdminGate
         // Only the mapped read-only Xtream routes and health may bypass admin auth.
         var endpoint = ctx.GetEndpoint() as RouteEndpoint;
         var route = endpoint?.RoutePattern.RawText;
-        if (route is "/health" or "/player_api.php" or "/live/{username}/{password}/{id:int}.ts"
-            or "/live/{username}/{password}/{id:int}" or "/{username}/{password}/{id:int}")
+        if (route is "/health" or "/player_api.php" or "/xmltv.php" or "/live/{username}/{password}/{id:int}.ts"
+            or "/artwork/{kind}/{id:int}/{signature}" or "/artwork/programme/{token}" or "/live/{username}/{password}/{id:int}" or "/{username}/{password}/{id:int}")
         { await next(); return; }
 
         ctx.Response.Headers.CacheControl = "no-store";

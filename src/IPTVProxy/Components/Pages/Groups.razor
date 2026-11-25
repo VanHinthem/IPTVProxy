@@ -1,0 +1,248 @@
+@page "/groups"
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.EntityFrameworkCore
+@using IPTVProxy.Data
+@using IPTVProxy.Providers
+@inject IDbContextFactory<CatalogDb> Factory
+@inject XmlTvGuide Guide
+@inject ArtworkService Artwork
+<PageTitle>Groepen — IPTVProxy</PageTitle>
+<p><a href="/">Providers</a> · <a href="/channels">Kanalen</a></p>
+<h1>Groepen en publicatie</h1>
+<p class="muted">Maak groepen op basis van de originele providercategorieën of stel ze zelf samen.</p>
+<button disabled="@refreshing" @onclick="RefreshGuide">EPG vernieuwen</button>
+<p>Nieuwe passende kanalen worden automatisch gepubliceerd. Kwaliteit is afgeleid uit bronlabels.</p>
+<label><input type="checkbox" checked="@managed" @onchange="Toggle" /> Samengestelde Xtream-catalogus gebruiken</label>
+<p>Schakel pas om nadat groepen zijn aangemaakt en gecontroleerd. Uitgeschakeld toont de originele providercatalogus.</p>
+<table><thead><tr><th>Groep</th><th>Land</th><th>Minimum</th><th>Actief</th><th></th></tr></thead><tbody>
+@foreach (var g in groups)
+{
+    <tr @ondragover:preventDefault @ondrop="()=>DropGroup(g.Id)"><td><span draggable="true" @ondragstart="()=>dragGroup=g.Id" title="Sleep groep" style="cursor:grab">⠿</span> @g.Name</td><td>@g.Country</td><td>@Quality(g.MinimumQuality)</td><td>@(g.Enabled?"Ja":"Nee")</td><td><button @onclick="() => Edit(g)">Wijzigen</button> <button @onclick="() => Preview(g.Id)">Kanalen beheren</button></td></tr>
+}
+</tbody></table>
+@if (selectedGroup is not null)
+{
+    <h2>@selectedGroup.Name — kanalen</h2>
+    <p>@rows.Count(x=>x.Selected) publiceerbare kanalen · @rows.Count beschikbare kandidaten in huidige zoekopdracht</p>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <input placeholder="Zoek kanaal" @bind="search" @bind:event="oninput" />
+        <button @onclick="ReloadRows">Zoeken</button>
+        <select @bind="view"><option value="all">Alle kandidaten</option><option value="selected">Geselecteerd</option><option value="excluded">Niet geselecteerd</option></select>
+        <button @onclick="()=>Bulk(true)">Selecteer zichtbare</button>
+        <button @onclick="()=>Bulk(false)">Sluit zichtbare uit</button>
+        <button @onclick="()=>Bulk(null)">Herstel automatische selectie (zichtbare)</button>
+        <button @onclick="Alphabetical">Herstel standaardvolgorde</button>
+        <button @onclick="Coverage">EPG-dekking berekenen</button>
+    </div>
+    <p class="muted">@coverageMessage</p>
+    <p>Maximaal 100 rijen per pagina. Zoek ook buiten de automatische groepsfilters om handmatig toe te voegen. Kwaliteits-, provider- en typevoorwaarden blijven gelden.</p>
+    <table><thead><tr><th>Publicatie</th><th>Kanaal</th><th>Geselecteerde bron</th><th>Bronnen</th><th>Volgorde</th></tr></thead><tbody>
+    @foreach(var r in Visible())
+    {
+        <tr @ondragover:preventDefault @ondrop="()=>DropChannel(r.Id)"><td><span draggable="@r.Selected.ToString().ToLowerInvariant()" @ondragstart="()=>dragChannel=r.Id" title="Sleep kanaal" style="cursor:grab">⠿</span> <input type="checkbox" checked="@r.Selected" @onchange="e=>Set(r.Id,e.Value is true)" /><button @onclick="()=>Set(r.Id,null)">Auto</button></td>
+        <td><img src="@Artwork.ChannelUrl(r.Id)" loading="lazy" alt="" width="40" height="28" style="object-fit:contain;vertical-align:middle" /> @r.Name @if(r.Override is not null){<small> (handmatig)</small>}</td>
+        <td>@(r.Best is null?"Niet publiceerbaar":ProviderName(r.Best.ProviderId)+" / "+Quality(r.Best.Quality))</td>
+        <td><button @onclick="()=>expanded=expanded==r.Id?0:r.Id">@r.Sources.Length bronnen</button></td>
+        <td><button disabled="@(!r.Selected)" @onclick="()=>Move(r.Id,-1)">↑</button> <button disabled="@(!r.Selected)" @onclick="()=>Move(r.Id,1)">↓</button></td></tr>
+        @if(expanded==r.Id)
+        {
+            <tr><td colspan="5"><table><thead><tr><th>Provider</th><th>Pakket</th><th>Categorie</th><th>Origineel / ID</th><th>Kwaliteit</th><th>EPG-ID</th><th>Voorkeur / selectie</th></tr></thead><tbody>
+            @foreach(var s in OrderedSources(r))
+            {
+                <tr class="@(r.Selected&&r.Best?.StreamId==s.StreamId?"chosen-source":"")"><td>@ProviderName(s.ProviderId)</td><td>@s.Package</td><td>@s.Category</td><td>@s.Name <small>#@s.StreamId</small></td><td>@Quality(s.Quality)</td><td>@(string.IsNullOrEmpty(s.EpgId)?"—":"Ja")</td><td><input type="radio" name="@($"pref-{r.Id}")" checked="@(r.Preferred==s.StreamId)" @onchange="()=>Prefer(r.Id,s.StreamId)" /> @SourceReason(r,s)</td></tr>
+            }
+            </tbody></table><button @onclick="()=>Prefer(r.Id,0)">Wis globale voorkeur</button></td></tr>
+        }
+    }
+    </tbody></table>
+    <button disabled="@(page==0)" @onclick="()=>page--">Vorige</button> <span>Pagina @(page+1)</span> <button disabled="@(Filtered().Count() <= (page+1)*100)" @onclick="()=>page++">Volgende</button>
+}
+<h2>@(edit.Id == 0 ? "Nieuwe groep" : "Groep wijzigen")</h2>
+<div style="display:grid;gap:.5rem;max-width:32rem">
+<label>Naam <input @bind="edit.Name" maxlength="100" /></label>
+<label><input type="checkbox" @bind="edit.Enabled" /> Actief</label>
+<label><input type="checkbox" @bind="edit.Automatic" /> Automatische selectie (met handmatige uitzonderingen); uit = handmatig</label>
+<label>Landcodes (bijv. NL,BE) <input @bind="edit.Country" /></label>
+<label>Kanaalnaam bevat <input @bind="edit.NameContains" /></label>
+<label>Providercategorie bevat (zonder referentiecategorieën) <input @bind="edit.CategoryContains" /></label>
+<fieldset><legend>Referentiecategorieën (optioneel)</legend>
+<p class="muted">Selecteer één of meer originele categorieën. Ze bepalen de zenders en volgorde, niet de afspeelprovider.</p>
+<label>Provider <select @bind="categoryProvider"><option value="0">Alle</option>@foreach(var p in providers){<option value="@p.Id">@p.Name</option>}</select></label>
+<input placeholder="Zoek categorie" @bind="categorySearch" @bind:event="oninput" />
+<div style="max-height:15rem;overflow:auto;border:1px solid #dbe3ed">
+@foreach(var c in AvailableCategories())
+{
+    <div><label><input type="checkbox" checked="@referenceIds.Contains(c.Id)" @onchange="e=>ToggleCategory(c.Id,e.Value is true)" /> @ProviderName(c.ProviderId) — @c.Name</label></div>
+}
+</div>
+@foreach(var id in referenceIds.ToArray())
+{
+    <div>@CategoryLabel(id) <button @onclick="()=>MoveCategory(id,-1)">↑</button><button @onclick="()=>MoveCategory(id,1)">↓</button><button @onclick="()=>ToggleCategory(id,false)">Verwijder</button></div>
+}
+</fieldset>
+<label>Bronpakketprioriteit (één pakketnaam per regel, binnen provider en kwaliteitstier)<textarea rows="4" @bind="edit.PackagePriority" placeholder="Odido&#10;Delta&#10;Tele2"></textarea></label>
+<label>Provider <select @bind="edit.ProviderId"><option value="0">Alle</option>@foreach(var p in providers){<option value="@p.Id">@p.Name</option>}</select></label>
+<label>Kanaaltype <select @bind="edit.ChannelType"><option value="">Alle</option><option value="Television">Televisie (vermoedelijk)</option><option value="Radio">Radio</option><option value="Event">Evenement</option><option value="Loop">24/7</option><option value="Unknown">Onbekend</option></select></label>
+<label>Minimumkwaliteit <select @bind="edit.MinimumQuality"><option value="0">Alle</option><option value="480">SD</option><option value="720">HD</option><option value="1080">FHD</option><option value="2160">4K</option></select></label>
+<label><input type="checkbox" @bind="edit.UnknownFallback" /> Onbekende kwaliteit als fallback</label>
+<label><input type="checkbox" @bind="edit.LowerFallback" /> Lagere bekende kwaliteit toestaan</label>
+<label><input type="checkbox" @bind="edit.QualityFirst" /> Kwaliteit vóór providerprioriteit</label>
+<label><input type="checkbox" @bind="edit.ProviderOrder" /> Providervolgorde gebruiken</label>
+<label>Sorteerreferentie <select @bind="edit.SortProviderId"><option value="0">Providerprioriteit</option>@foreach(var p in providers){<option value="@p.Id">@p.Name</option>}</select></label>
+<label>Volgorde <input type="number" @bind="edit.SortOrder" /></label>
+<button @onclick="Save">Opslaan</button><button @onclick="New">Nieuwe groep</button>
+</div>
+<p role="status">@message</p>
+@code {
+    private List<ChannelGroup> groups = [];
+    private List<Provider> providers = [];
+    private ChannelGroup edit = new();
+    private bool managed;
+    private sealed record Row(int Id,string Name,bool Selected,bool? Override,int? Position,ManagedPublication.Candidate? Best,ManagedPublication.Candidate[] Sources,int Preferred,ManagedPublication.Candidate[] Ranked);
+    private ChannelGroup? selectedGroup;
+    private List<Row> rows=[];
+    private string search="",view="all";
+    private int page,expanded,dragGroup,dragChannel,categoryProvider;
+    private string categorySearch="",coverageMessage="";
+    private List<LiveCategory> categories=[];
+    private List<int> referenceIds=[];
+    private string ProviderName(int id)=>providers.FirstOrDefault(p=>p.Id==id)?.Name ?? id.ToString();
+    private static string Quality(int q)=>q switch{2160=>"4K",1080=>"FHD",720=>"HD",480=>"SD",_=>"Onbekend"};
+    private IEnumerable<Row> Filtered()=>rows.Where(r=>view=="all" || (view=="selected"?r.Selected:!r.Selected));
+    private IEnumerable<Row> Visible()=>Filtered().Skip(page*100).Take(100);
+    private async Task Preview(int id)
+    {
+        selectedGroup=groups.Single(g=>g.Id==id);coverageMessage="";search="";view="all";page=0;expanded=0;await ReloadRows();
+    }
+    private async Task ReloadRows()
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var g=selectedGroup;
+        var sources=(await ManagedPublication.Candidates(db).ToListAsync()).ToLookup(s=>s.ChannelId);
+        var overrides=await db.GroupOverrides.AsNoTracking().Where(x=>x.GroupId==g.Id).ToDictionaryAsync(x=>x.ChannelId);
+        var channels=await db.LogicalChannels.AsNoTracking().ToListAsync();
+        rows=channels.Where(c=>sources[c.Id].Any()).Select(c=>{
+            var o=overrides.GetValueOrDefault(c.Id);
+            bool? membership=o is null || o.OrderOnly?null:o.Include;
+            var all=sources[c.Id].ToArray();
+            var automatic=ManagedPublication.Eligible(g,c,all,null);
+            var ranked=ManagedPublication.Eligible(g,c,all,membership);
+            var eligible=ManagedPublication.Eligible(g,c,all,true);
+            return new {row=new Row(c.Id,c.Name,ranked.Length>0,membership,o?.Position,ranked.FirstOrDefault()??eligible.FirstOrDefault(),all,c.PreferredStreamId,ranked.Length>0?ranked:eligible), automatic=automatic.Length>0};
+        }).Where(x=> (search.Length>0 ? x.row.Name.Contains(search,StringComparison.OrdinalIgnoreCase) : x.automatic || x.row.Override is not null || (!g.Automatic && x.row.Sources.Any(s=>string.IsNullOrWhiteSpace(g.Country)||g.Country.Split(',',StringSplitOptions.TrimEntries).Contains(s.Country,StringComparer.OrdinalIgnoreCase)))))
+        .Select(x=>x.row).OrderBy(x=>x.Position??int.MaxValue).ThenBy(x=>ManagedPublication.SortKey(g,x.Sources)).ThenBy(x=>x.Name).ThenBy(x=>x.Id).ToList();
+        page=0;
+    }
+    private async Task Set(int id,bool? include)=>await SetMany([id],include);
+    private async Task Bulk(bool? include)=>await SetMany(Visible().Select(r=>r.Id).ToArray(),include);
+    private async Task SetMany(int[] ids,bool? include)
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();var gid=selectedGroup.Id;
+        var existing=await db.GroupOverrides.Where(x=>x.GroupId==gid&&ids.Contains(x.ChannelId)).ToDictionaryAsync(x=>x.ChannelId);
+        foreach(var id in ids)
+        {
+            var o=existing.GetValueOrDefault(id);
+            if(include is null){if(o is not null){if(o.Position is null)db.Remove(o);else o.OrderOnly=true;}continue;}
+            if(o is null)db.Add(new GroupOverride{GroupId=gid,ChannelId=id,Include=include.Value});
+            else {o.Include=include.Value;o.OrderOnly=false;}
+        }
+        await db.SaveChangesAsync();await ReloadRows();
+    }
+    private async Task Prefer(int id,int stream)
+    {
+        await using var db=await Factory.CreateDbContextAsync();var c=await db.LogicalChannels.SingleAsync(x=>x.Id==id);
+        c.PreferredStreamId=stream;await db.SaveChangesAsync();await ReloadRows();
+    }
+    private async Task Move(int id,int delta,int? target=null)
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();var gid=selectedGroup.Id;
+        var published=await ManagedPublication.ListAsync(db,gid,CancellationToken.None,false);
+        var ids=published.Select(x=>x.ChannelId).ToList();var i=ids.IndexOf(id);var j=target is null?i+delta:ids.IndexOf(target.Value);
+        if(i<0||j<0||j>=ids.Count)return;
+        ids.RemoveAt(i);ids.Insert(j,id);
+        var existing=await db.GroupOverrides.Where(x=>x.GroupId==gid).ToDictionaryAsync(x=>x.ChannelId);
+        for(var k=0;k<ids.Count;k++)
+        {
+            if(!existing.TryGetValue(ids[k],out var o)){o=new GroupOverride{GroupId=gid,ChannelId=ids[k],Include=true,OrderOnly=true};db.Add(o);}
+            o.Position=k;
+        }
+        await db.SaveChangesAsync();await ReloadRows();
+    }
+    private async Task Alphabetical()
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();var gid=selectedGroup.Id;
+        foreach(var o in await db.GroupOverrides.Where(x=>x.GroupId==gid).ToListAsync()){if(o.OrderOnly)db.Remove(o);else o.Position=null;}
+        await db.SaveChangesAsync();await ReloadRows();
+    }
+    private IEnumerable<LiveCategory> AvailableCategories()=>categories.Where(c=>(categoryProvider==0||c.ProviderId==categoryProvider)&&c.Name.Contains(categorySearch,StringComparison.OrdinalIgnoreCase)).Take(200);
+    private string CategoryLabel(int id){var c=categories.FirstOrDefault(x=>x.Id==id);return c is null?$"Niet beschikbaar #{id}":ProviderName(c.ProviderId)+" — "+c.Name;}
+    private void ToggleCategory(int id,bool include){if(include&&!referenceIds.Contains(id))referenceIds.Add(id);else if(!include)referenceIds.Remove(id);}
+    private void MoveCategory(int id,int delta){var i=referenceIds.IndexOf(id);var j=i+delta;if(i>=0&&j>=0&&j<referenceIds.Count)(referenceIds[i],referenceIds[j])=(referenceIds[j],referenceIds[i]);}
+    private async Task DropGroup(int target)
+    {
+        var id=dragGroup;dragGroup=0;if(id==0||id==target)return;
+        var order=groups.Select(g=>g.Id).ToList();var i=order.IndexOf(id);var j=order.IndexOf(target);if(i<0||j<0)return;
+        order.RemoveAt(i);order.Insert(j,id);
+        await using var db=await Factory.CreateDbContextAsync();var all=await db.ChannelGroups.ToListAsync();
+        foreach(var g in all){var pos=order.IndexOf(g.Id);if(pos>=0)g.SortOrder=pos;}
+        await db.SaveChangesAsync();await Load();
+    }
+    private async Task DropChannel(int target){var id=dragChannel;dragChannel=0;if(id!=0&&id!=target)await Move(id,0,target);}
+    private IEnumerable<ManagedPublication.Candidate> OrderedSources(Row r)=>r.Ranked.Concat(r.Sources.Where(s=>!r.Ranked.Any(x=>x.StreamId==s.StreamId)));
+    private string SourceReason(Row r,ManagedPublication.Candidate s)
+    {
+        if(r.Selected&&r.Best?.StreamId==s.StreamId)return "Geselecteerd";
+        var i=Array.FindIndex(r.Ranked,x=>x.StreamId==s.StreamId);
+        if(i>=0)return $"Kandidaat {i+1}";
+        if(selectedGroup is null)return "";
+        var g=selectedGroup;
+        if(g.ProviderId!=0&&s.ProviderId!=g.ProviderId)return "Andere provider";
+        if(g.ChannelType!=""&&s.ChannelType!=g.ChannelType)return "Ander kanaaltype";
+        if(s.Quality==0&&!g.UnknownFallback&&g.MinimumQuality>0)return "Onbekende kwaliteit uitgesloten";
+        if(s.Quality>0&&s.Quality<g.MinimumQuality&&!g.LowerFallback)return "Onder minimumkwaliteit";
+        return "Buiten groepsfilters";
+    }
+    private async Task Coverage()
+    {
+        if(selectedGroup is null)return;
+        var result=await Guide.CoverageAsync(selectedGroup.Id,CancellationToken.None);
+        coverageMessage=$"EPG: {result.Covered} van {result.Total} publiceerbare kanalen ({(result.Total==0?0:100.0*result.Covered/result.Total):F1}%).";
+    }
+    private bool refreshing;
+    private async Task RefreshGuide(){refreshing=true;try{await Guide.RefreshAsync(CancellationToken.None);message="EPG-vernieuwing uitgevoerd; controleer de importlogs.";}finally{refreshing=false;}}
+    private string message = "";
+    protected override async Task OnInitializedAsync() => await Load();
+    private async Task Load()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        groups = await db.ChannelGroups.AsNoTracking().OrderBy(x => x.SortOrder).ThenBy(x => x.Id).ToListAsync();
+        providers = await db.Providers.AsNoTracking().OrderBy(x => x.Priority).ThenBy(x => x.Id).ToListAsync();
+        categories=await db.LiveCategories.AsNoTracking().Where(c=>c.Active).OrderBy(c=>c.ProviderId).ThenBy(c=>c.SourceOrder).ThenBy(c=>c.Id).ToListAsync();
+        managed = await ManagedPublication.IsEnabled(db, CancellationToken.None);
+    }
+    private void New(){edit=new();referenceIds=[];categorySearch="";categoryProvider=0;}
+    private void Edit(ChannelGroup g) {referenceIds=ManagedPublication.ReferenceIds(g).ToList();edit = new ChannelGroup { Id=g.Id, Name=g.Name, Enabled=g.Enabled, Automatic=g.Automatic, Country=g.Country, NameContains=g.NameContains, CategoryContains=g.CategoryContains, ChannelType=g.ChannelType, ProviderId=g.ProviderId, MinimumQuality=g.MinimumQuality, UnknownFallback=g.UnknownFallback, LowerFallback=g.LowerFallback, QualityFirst=g.QualityFirst, SortOrder=g.SortOrder, ProviderOrder=g.ProviderOrder, SortProviderId=g.SortProviderId,ReferenceCategories=g.ReferenceCategories,PackagePriority=g.PackagePriority };}
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(edit.Name)) { message="Vul een groepsnaam in."; return; }
+        try {
+            await using var db = await Factory.CreateDbContextAsync();
+            edit.ReferenceCategories=string.Join(',',referenceIds);
+            if (edit.Id == 0) {edit.SortOrder=groups.Count==0?0:groups.Max(g=>g.SortOrder)+1;db.ChannelGroups.Add(edit);} else db.ChannelGroups.Update(edit);
+            await db.SaveChangesAsync();
+            message="Groep opgeslagen."; selectedGroup=null; New(); await Load();
+        } catch { message="Opslaan mislukt."; }
+    }
+    private async Task Toggle(ChangeEventArgs e)
+    {
+        var enabled = e.Value is true;
+        await using var db = await Factory.CreateDbContextAsync();
+        if (enabled && (await ManagedPublication.ListAsync(db,null,CancellationToken.None)).Count == 0) { message="Maak eerst een actieve groep met publiceerbare kanalen."; await Load(); return; }
+        var settings = await db.PublicationSettings.SingleAsync(x => x.Id == 1);
+        settings.Managed = enabled; await db.SaveChangesAsync(); await Load();
+    }
+}
