@@ -48,6 +48,25 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         log.LogInformation("Playback requested: stream {StreamId}", id);
         if (!accounts.IptvValid(username, password)) { ctx.Response.StatusCode = 401; return; }
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
+        if (id < 0)
+        {
+            var candidates = await ManagedPublication.ResolveAsync(db, id, ctx.RequestAborted);
+            if (candidates.Length == 0) { ctx.Response.StatusCode = 404; return; }
+            // Select a currently available source; the existing session reservation remains
+            // authoritative for connection limits if concurrent requests race.
+            lock (gate)
+            {
+                var selected = candidates.FirstOrDefault(c =>
+                    sessions.TryGetValue(c.StreamId, out var active) && !active.Closing && active.Subscribers < 16 ||
+                    sessions.Values.Count(s => s.ProviderId == c.ProviderId) < c.Limit);
+                id = (selected ?? candidates[0]).StreamId;
+            }
+        }
+        else if (await ManagedPublication.IsEnabled(db, ctx.RequestAborted))
+        {
+            ctx.Response.StatusCode = 404;
+            return;
+        }
         var stream = await db.LiveStreams.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id && x.Active, ctx.RequestAborted);
         if (stream is null) { ctx.Response.StatusCode = 404; return; }
         var provider = await db.Providers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stream.ProviderId && x.Enabled, ctx.RequestAborted);

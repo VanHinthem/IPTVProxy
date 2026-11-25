@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -114,6 +114,32 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             e.HasOne(x => x.LogicalChannel).WithMany().HasForeignKey(x => x.LogicalChannelId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        }
+        if (managedChannels && groups)
+        {
+            model.Entity<ChannelGroup>(e => {
+                e.ToTable("ChannelGroups"); e.HasKey(x => x.Id);
+                e.Property(x => x.Id).ValueGeneratedOnAdd();
+                e.Property(x => x.Name).IsRequired();
+                e.Property(x => x.Country).IsRequired();
+                e.Property(x => x.NameContains).IsRequired();
+                e.Property(x => x.CategoryContains).IsRequired();
+                e.Property(x => x.Enabled); e.Property(x => x.Automatic);
+                e.Property(x => x.ProviderId); e.Property(x => x.MinimumQuality);
+                e.Property(x => x.UnknownFallback); e.Property(x => x.LowerFallback);
+                e.Property(x => x.QualityFirst); e.Property(x => x.SortOrder);
+            });
+            model.Entity<GroupOverride>(e => {
+                e.ToTable("GroupOverrides"); e.HasKey(x => new { x.GroupId, x.ChannelId });
+                e.Property(x => x.Include);
+                e.HasIndex(x => x.ChannelId);
+                e.HasOne<ChannelGroup>().WithMany().HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.Cascade);
+                e.HasOne<LogicalChannel>().WithMany().HasForeignKey(x => x.ChannelId).OnDelete(DeleteBehavior.Cascade);
+            });
+            model.Entity<PublicationSettings>(e => {
+                e.ToTable("PublicationSettings"); e.HasKey(x => x.Id);
+                e.Property(x => x.Id).ValueGeneratedOnAdd(); e.Property(x => x.Managed);
+            });
         }
     }
 }

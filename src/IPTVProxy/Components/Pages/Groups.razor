@@ -1,0 +1,69 @@
+@page "/groups"
+@using Microsoft.EntityFrameworkCore
+@using IPTVProxy.Data
+@using IPTVProxy.Providers
+@inject IDbContextFactory<CatalogDb> Factory
+<PageTitle>Groepen — IPTVProxy</PageTitle>
+<p><a href="/">Providers</a> · <a href="/channels">Kanalen</a></p>
+<h1>Groepen en publicatie</h1>
+<p>Nieuwe passende kanalen worden automatisch gepubliceerd. Kwaliteit is afgeleid uit bronlabels.</p>
+<label><input type="checkbox" checked="@managed" @onchange="Toggle" /> Samengestelde Xtream-catalogus gebruiken</label>
+<p>Schakel pas om nadat groepen zijn aangemaakt en gecontroleerd. Uitgeschakeld toont de originele providercatalogus.</p>
+<table><thead><tr><th>Groep</th><th>Land</th><th>Minimum</th><th>Actief</th><th></th></tr></thead><tbody>
+@foreach (var g in groups)
+{
+    <tr><td>@g.Name</td><td>@g.Country</td><td>@g.MinimumQuality</td><td>@g.Enabled</td><td><button @onclick="() => Edit(g)">Wijzigen</button></td></tr>
+}
+</tbody></table>
+<h2>@(edit.Id == 0 ? "Nieuwe groep" : "Groep wijzigen")</h2>
+<div style="display:grid;gap:.5rem;max-width:32rem">
+<label>Naam <input @bind="edit.Name" maxlength="100" /></label>
+<label><input type="checkbox" @bind="edit.Enabled" /> Actief</label>
+<label><input type="checkbox" @bind="edit.Automatic" /> Automatische selectie</label>
+<label>Landcodes (bijv. NL,BE) <input @bind="edit.Country" /></label>
+<label>Kanaalnaam bevat <input @bind="edit.NameContains" /></label>
+<label>Providercategorie bevat <input @bind="edit.CategoryContains" /></label>
+<label>Provider <select @bind="edit.ProviderId"><option value="0">Alle</option>@foreach(var p in providers){<option value="@p.Id">@p.Name</option>}</select></label>
+<label>Minimumkwaliteit <select @bind="edit.MinimumQuality"><option value="0">Alle</option><option value="480">SD</option><option value="720">HD</option><option value="1080">FHD</option><option value="2160">4K</option></select></label>
+<label><input type="checkbox" @bind="edit.UnknownFallback" /> Onbekende kwaliteit als fallback</label>
+<label><input type="checkbox" @bind="edit.LowerFallback" /> Lagere bekende kwaliteit toestaan</label>
+<label><input type="checkbox" @bind="edit.QualityFirst" /> Kwaliteit vóór providerprioriteit</label>
+<label>Volgorde <input type="number" @bind="edit.SortOrder" /></label>
+<button @onclick="Save">Opslaan</button><button @onclick="New">Nieuwe groep</button>
+</div>
+<p role="status">@message</p>
+@code {
+    private List<ChannelGroup> groups = [];
+    private List<Provider> providers = [];
+    private ChannelGroup edit = new();
+    private bool managed;
+    private string message = "";
+    protected override async Task OnInitializedAsync() => await Load();
+    private async Task Load()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        groups = await db.ChannelGroups.AsNoTracking().OrderBy(x => x.SortOrder).ThenBy(x => x.Id).ToListAsync();
+        providers = await db.Providers.AsNoTracking().OrderBy(x => x.Priority).ThenBy(x => x.Id).ToListAsync();
+        managed = await ManagedPublication.IsEnabled(db, CancellationToken.None);
+    }
+    private void New() => edit = new();
+    private void Edit(ChannelGroup g) => edit = new ChannelGroup { Id=g.Id, Name=g.Name, Enabled=g.Enabled, Automatic=g.Automatic, Country=g.Country, NameContains=g.NameContains, CategoryContains=g.CategoryContains, ProviderId=g.ProviderId, MinimumQuality=g.MinimumQuality, UnknownFallback=g.UnknownFallback, LowerFallback=g.LowerFallback, QualityFirst=g.QualityFirst, SortOrder=g.SortOrder };
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(edit.Name)) { message="Vul een groepsnaam in."; return; }
+        try {
+            await using var db = await Factory.CreateDbContextAsync();
+            if (edit.Id == 0) db.ChannelGroups.Add(edit); else db.ChannelGroups.Update(edit);
+            await db.SaveChangesAsync();
+            message="Groep opgeslagen."; New(); await Load();
+        } catch { message="Opslaan mislukt."; }
+    }
+    private async Task Toggle(ChangeEventArgs e)
+    {
+        var enabled = e.Value is true;
+        await using var db = await Factory.CreateDbContextAsync();
+        if (enabled && !await db.ChannelGroups.AnyAsync(x => x.Enabled)) { message="Maak eerst een actieve groep."; return; }
+        var settings = await db.PublicationSettings.SingleAsync(x => x.Id == 1);
+        settings.Managed = enabled; await db.SaveChangesAsync(); await Load();
+    }
+}

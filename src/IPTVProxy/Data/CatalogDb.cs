@@ -9,8 +9,14 @@ public sealed class CatalogDb(DbContextOptions<CatalogDb> options) : DbContext(o
     public DbSet<LiveStream> LiveStreams => Set<LiveStream>();
     public DbSet<LogicalChannel> LogicalChannels => Set<LogicalChannel>();
     public DbSet<ChannelSource> ChannelSources => Set<ChannelSource>();
+    public DbSet<ChannelGroup> ChannelGroups => Set<ChannelGroup>();
+    public DbSet<GroupOverride> GroupOverrides => Set<GroupOverride>();
+    public DbSet<PublicationSettings> PublicationSettings => Set<PublicationSettings>();
     protected override void OnModelCreating(ModelBuilder model)
     {
+        model.Entity<GroupOverride>().HasKey(x => new { x.GroupId, x.ChannelId });
+        model.Entity<GroupOverride>().HasOne<ChannelGroup>().WithMany().HasForeignKey(x => x.GroupId);
+        model.Entity<GroupOverride>().HasOne<LogicalChannel>().WithMany().HasForeignKey(x => x.ChannelId);
         model.Entity<LogicalChannel>().HasIndex(x => x.MatchKey);
         model.Entity<ChannelSource>().HasKey(x => x.LiveStreamId);
         model.Entity<ChannelSource>().HasIndex(x => x.LogicalChannelId);
@@ -73,4 +79,32 @@ public sealed class ChannelSource
     public string Codec { get; set; } = "";
     public bool Manual { get; set; }
     public bool ReviewRequired { get; set; }
+}
+
+public sealed class ChannelGroup
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+    public bool Automatic { get; set; } = true;
+    public string Country { get; set; } = "";
+    public string NameContains { get; set; } = "";
+    public string CategoryContains { get; set; } = "";
+    public int ProviderId { get; set; }
+    public int MinimumQuality { get; set; }
+    public bool UnknownFallback { get; set; } = true;
+    public bool LowerFallback { get; set; }
+    public bool QualityFirst { get; set; }
+    public int SortOrder { get; set; }
+}
+public sealed class GroupOverride
+{
+    public int GroupId { get; set; }
+    public int ChannelId { get; set; }
+    public bool Include { get; set; }
+}
+public sealed class PublicationSettings
+{
+    public int Id { get; set; }
+    public bool Managed { get; set; }
 }

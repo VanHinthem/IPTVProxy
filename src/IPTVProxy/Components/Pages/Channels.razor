@@ -1,0 +1,75 @@
+@page "/channels"
+@using Microsoft.EntityFrameworkCore
+@using IPTVProxy.Data
+@inject IDbContextFactory<CatalogDb> Factory
+<PageTitle>Kanalen — IPTVProxy</PageTitle>
+<p><a href="/">Providers</a> · <a href="/groups">Groepen</a></p>
+<h1>Logische kanalen</h1>
+<p>@total logische kanalen · @sourceCount actieve bronstreams · @reviewCount te beoordelen bronkoppelingen</p>
+<label>Zoeken <input @bind="search" /></label>
+<label><input type="checkbox" @bind="review" /> Alleen te beoordelen</label>
+<button @onclick="Search">Zoeken</button>
+<table><thead><tr><th>Naam</th><th>Land</th><th>Bronnen</th><th></th></tr></thead><tbody>
+@foreach(var c in rows)
+{
+    <tr><td>@c.Name</td><td>@c.Country</td><td>@c.Count</td><td><button @onclick="() => Details(c.Id)">Bronnen</button></td></tr>
+}
+</tbody></table>
+<button disabled="@(page == 0)" @onclick="Previous">Vorige</button> Pagina @(page + 1) <button disabled="@(rows.Count < 100)" @onclick="Next">Volgende</button>
+@if (selected != 0)
+{
+    <h2>Bronstreams voor kanaal @selected</h2>
+    <table><thead><tr><th>Provider</th><th>Originele naam</th><th>Kwaliteit (label)</th><th>Review</th></tr></thead><tbody>
+    @foreach(var s in details)
+    {
+        <tr><td>@s.Provider</td><td>@s.Name</td><td>@s.Quality</td><td>@s.Review</td></tr>
+    }
+    </tbody></table>
+    <label>Groep <select @bind="groupId"><option value="0">Kies groep</option>@foreach(var g in groups){<option value="@g.Id">@g.Name</option>}</select></label>
+    <button @onclick="() => Override(true)">Toevoegen</button>
+    <button @onclick="() => Override(false)">Uitsluiten</button>
+    <button @onclick="() => Override(null)">Automatisch</button>
+}
+<p role="status">@message</p>
+@code {
+    private record Row(int Id,string Name,string Country,int Count);
+    private record Source(string Provider,string Name,int Quality,bool Review);
+    private List<Row> rows = [];
+    private List<Source> details = [];
+    private List<ChannelGroup> groups = [];
+    private string search="", message="";
+    private bool review;
+    private int page,total,sourceCount,reviewCount,selected,groupId;
+    protected override async Task OnInitializedAsync() => await Load();
+    private async Task Search(){page=0;await Load();}
+    private async Task Previous(){if(page>0)page--;await Load();}
+    private async Task Next(){page++;await Load();}
+    private async Task Load()
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        var activeLinks=from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id where s.Active select l;
+        sourceCount=await db.LiveStreams.CountAsync(x=>x.Active);
+        reviewCount=await activeLinks.CountAsync(x=>x.ReviewRequired);
+        total=await db.LogicalChannels.CountAsync();
+        var q=db.LogicalChannels.AsNoTracking().Where(c=>c.Name.Contains(search));
+        if(review)q=q.Where(c=>activeLinks.Any(l=>l.LogicalChannelId==c.Id && l.ReviewRequired));
+        rows=await q.OrderBy(c=>c.Name).ThenBy(c=>c.Id).Skip(page*100).Take(100).Select(c=>new Row(c.Id,c.Name,c.Country,activeLinks.Count(l=>l.LogicalChannelId==c.Id))).ToListAsync();
+        groups=await db.ChannelGroups.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+    }
+    private async Task Details(int id)
+    {
+        selected=id;
+        await using var db=await Factory.CreateDbContextAsync();
+        details=await (from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id where l.LogicalChannelId==id && s.Active orderby p.Priority, l.Quality descending select new Source(p.Name,s.Name,l.Quality,l.ReviewRequired)).Take(500).ToListAsync();
+    }
+    private async Task Override(bool? include)
+    {
+        if(groupId==0 || selected==0)return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var row=await db.GroupOverrides.SingleOrDefaultAsync(x=>x.GroupId==groupId && x.ChannelId==selected);
+        if(include is null){if(row is not null)db.GroupOverrides.Remove(row);}
+        else if(row is null)db.GroupOverrides.Add(new GroupOverride{GroupId=groupId,ChannelId=selected,Include=include.Value});
+        else row.Include=include.Value;
+        await db.SaveChangesAsync();message="Groepsuitzondering opgeslagen.";
+    }
+}

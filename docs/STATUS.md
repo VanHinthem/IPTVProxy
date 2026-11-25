@@ -10,3 +10,5 @@ CI en imagepublicatie 568b0f3 groen. NAS-update, behoud catalogus, playback beid
 
 ## Werkblok 2 — in ontwikkeling
 Besluiten: onbekende kwaliteit als fallback, automatische publicatie van passende kanalen, standaard providerprioriteit eerst. Eerste increment: additieve catalogusmigratie, afgeleide naammetadata, conservatieve matching en import/backfill. Ruwe Xtream-publicatie en playback blijven voorlopig intact. Groepen, beheer, EPG-publicatie, periodieke synchronisatie en bronselectie volgen binnen dezelfde PR. Nog niet op NAS geaccepteerd.
+
+Tweede increment: dynamische/handmatige groepen, persistente uitzonderingen, kanaaloverzicht met paginering, bronrangschikking en opt-in samengestelde Xtream-publicatie. Publicatie-ID en capaciteitshandling nog te verharden vóór NAS-deployment; EPG en automatische sync volgen.

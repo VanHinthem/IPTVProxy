@@ -29,6 +29,27 @@ public static class XtreamEndpoints
                       join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
                       where s.Active && c.Active
                       select new { s, p, c };
+        if (await ManagedPublication.IsEnabled(db, ct))
+        {
+            if (q["action"] == "get_live_categories")
+                return Results.Json(await db.ChannelGroups.AsNoTracking().Where(g => g.Enabled).OrderBy(g => g.SortOrder).ThenBy(g => g.Id)
+                    .Select(g => new { category_id = g.Id.ToString(), category_name = g.Name, parent_id = 0 }).ToListAsync(ct));
+            if (q["action"] == "get_live_streams")
+            {
+                int? groupId = null;
+                if (!string.IsNullOrEmpty(q["category_id"]) && q["category_id"] != "0")
+                {
+                    if (!int.TryParse(q["category_id"], out var parsed)) return Results.BadRequest();
+                    groupId = parsed;
+                }
+                var published = await ManagedPublication.ListAsync(db, groupId, ct);
+                return Results.Json(published.Select((x,i) => new {
+                    num = i + 1, name = x.Name, stream_type = "live", stream_id = x.Id,
+                    stream_icon = "", epg_channel_id = "", category_id = x.GroupId.ToString(),
+                    tv_archive = 0, tv_archive_duration = 0, direct_source = ""
+                }));
+            }
+        }
         switch (q["action"].ToString())
         {
             case "":
