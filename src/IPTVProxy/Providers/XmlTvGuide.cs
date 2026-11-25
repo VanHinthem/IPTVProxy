@@ -8,9 +8,16 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace IPTVProxy.Providers;
-public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog catalog,IHttpClientFactory clients,ILogger<XmlTvGuide> log)
+public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog catalog,IHttpClientFactory clients,ILogger<XmlTvGuide> log,IConfiguration config)
 {
     private readonly SemaphoreSlim gate=new(1,1);
+    private readonly SemaphoreSlim publicationGate=new(1,1);
+    private long generation;
+    private string? cachedSignature;
+    private long cachedGeneration=-1;
+    private DateTimeOffset cachedAt;
+    private readonly string cacheDirectory=Path.Combine(Path.GetFullPath(config["DataDirectory"]??"data"),"xmltv-cache");
+    public void Invalidate()=>Interlocked.Increment(ref generation);
     public async Task RefreshAsync(CancellationToken ct)
     {
         if(!await gate.WaitAsync(0,ct))return;
@@ -84,6 +91,7 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         cmd.Parameters.Clear();cmd.CommandText="INSERT OR REPLACE INTO EpgRefreshState VALUES($p,$updated,$count)";
         cmd.Parameters.AddWithValue("$p",p.Id);cmd.Parameters.AddWithValue("$updated",now.ToString("O"));cmd.Parameters.AddWithValue("$count",entries.Count);await cmd.ExecuteNonQueryAsync(token);
         await tx.CommitAsync(token);
+        Invalidate();
         log.LogInformation("XMLTV imported for provider {ProviderId}: {Count} programmes",p.Id,entries.Count);
     }
     private async Task<HttpResponseMessage> FetchAsync(HttpClient client,Uri uri,int providerId,CancellationToken ct)
@@ -153,11 +161,68 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         if(s.Length==20&&(s[15]=='+'||s[15]=='-'))s=s.Insert(18,":");
         return DateTimeOffset.TryParseExact(s,new[]{"yyyyMMddHHmmss zzz","yyyyMMddHHmmss"},CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal,out var dt)?dt.ToUniversalTime():null;
     }
-    public async Task WriteAsync(HttpContext ctx)
+    // Open a stable file handle before releasing the gate; later atomic replacement
+    // cannot change the bytes already being downloaded by another client.
+    public async Task<FileStream?> OpenGuideAsync(CancellationToken ct)
     {
-        var ct=ctx.RequestAborted;
-        await using var db=await factory.CreateDbContextAsync(ct);
-        var managed=await ManagedPublication.IsEnabled(db,ct);
+        await publicationGate.WaitAsync(ct);
+        string? temporary=null;
+        try
+        {
+            Directory.CreateDirectory(cacheDirectory);
+            await using var db=await factory.CreateDbContextAsync(ct);
+            var managed=await ManagedPublication.IsEnabled(db,ct);
+            var path=Path.Combine(cacheDirectory,managed?"managed.xml":"raw.xml");
+            // Include membership and EPG mapping, not only the selected playback source.
+            // Hash the relevant catalog metadata to detect changes without relying on UI hooks.
+            var map=await BuildMapAsync(db,managed,ct);
+            using var hash=System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            void Add(string value)
+            {
+                var bytes=Encoding.UTF8.GetBytes(value);
+                hash.AppendData(BitConverter.GetBytes(bytes.Length));hash.AppendData(bytes);
+            }
+            Add(managed.ToString());var currentGeneration=Interlocked.Read(ref generation);
+            foreach(var item in map)
+            {
+                Add(item.Id);Add(item.Name);
+                foreach(var candidate in item.Candidates){Add(candidate.ProviderId.ToString(CultureInfo.InvariantCulture));Add(candidate.EpgId);}
+            }
+            var signature=Convert.ToHexString(hash.GetHashAndReset());
+            if(signature!=cachedSignature || currentGeneration!=cachedGeneration || DateTimeOffset.UtcNow-cachedAt>TimeSpan.FromMinutes(30) || !File.Exists(path))
+            {
+                temporary=Path.Combine(cacheDirectory,Guid.NewGuid().ToString("N")+".tmp");
+                try
+                {
+                    await using(var output=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None,65536,FileOptions.Asynchronous))
+                    {
+                        await GenerateAsync(db,map,output,ct);
+                        await output.FlushAsync(ct);
+                    }
+                    File.Move(temporary,path,true);temporary=null;
+                    cachedSignature=signature;cachedGeneration=currentGeneration;cachedAt=DateTimeOffset.UtcNow;
+                    log.LogInformation("XMLTV cache generated: {Channels} channels, {Bytes} bytes",map.Count,new FileInfo(path).Length);
+                }
+                catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
+                catch(Exception ex)
+                {
+                    log.LogWarning("XMLTV generation failed: {ErrorType}",ex.GetType().Name);
+                    // Never serve a previous catalog with different membership or mode.
+                    if(cachedSignature!=signature || !File.Exists(path))return null;
+                }
+            }
+            return new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read|FileShare.Delete,65536,FileOptions.Asynchronous|FileOptions.SequentialScan);
+        }
+        catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
+        catch(Exception ex){log.LogWarning("XMLTV cache unavailable: {ErrorType}",ex.GetType().Name);return null;}
+        finally
+        {
+            if(temporary is not null){try{File.Delete(temporary);}catch(IOException){}catch(UnauthorizedAccessException){}}
+            publicationGate.Release();
+        }
+    }
+    private static async Task<List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)>> BuildMapAsync(CatalogDb db,bool managed,CancellationToken ct)
+    {
         var sources=await ManagedPublication.Candidates(db).ToListAsync(ct);
         var map=new List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)>();
         if(managed)
@@ -171,13 +236,16 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         {
             foreach(var s in sources.Where(s=>s.EpgId!=""))map.Add(("iptvproxy.raw."+s.StreamId,s.Name,[s]));
         }
+        return map;
+    }
+    private static async Task GenerateAsync(CatalogDb db,List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)> map,Stream output,CancellationToken ct)
+    {
         await db.Database.OpenConnectionAsync(ct);
         var connection=(SqliteConnection)db.Database.GetDbConnection();
         await using var command=connection.CreateCommand();
         command.CommandText="SELECT Start,Stop,Title,Description FROM EpgPrograms WHERE ProviderId=$p AND EpgId=$id AND Stop>$now ORDER BY Start";
         command.Parameters.AddWithValue("$p",0);command.Parameters.AddWithValue("$id","");command.Parameters.AddWithValue("$now",DateTimeOffset.UtcNow.AddHours(-6).ToString("O"));
-        ctx.Response.ContentType="application/xml; charset=utf-8";
-        using var writer=XmlWriter.Create(ctx.Response.Body,new XmlWriterSettings{Async=true,Encoding=new UTF8Encoding(false),CloseOutput=false});
+        using var writer=XmlWriter.Create(output,new XmlWriterSettings{Async=true,Encoding=new UTF8Encoding(false),CloseOutput=false});
         await writer.WriteStartDocumentAsync();await writer.WriteStartElementAsync(null,"tv",null);
         foreach(var item in map)
         {
@@ -185,6 +253,7 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         }
         foreach(var item in map)
         {
+            ct.ThrowIfCancellationRequested();
             foreach(var candidate in item.Candidates.DistinctBy(s=>(s.ProviderId,s.EpgId)))
             {
                 command.Parameters["$p"].Value=candidate.ProviderId;command.Parameters["$id"].Value=candidate.EpgId;

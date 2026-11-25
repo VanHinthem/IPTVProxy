@@ -21,8 +21,9 @@ public static class XtreamEndpoints
         var q=ctx.Request.Query;
         if(!accounts.IptvValid(q["username"].ToString(),q["password"].ToString()))return Results.Unauthorized();
         ctx.Response.Headers.CacheControl="no-store";
-        await guide.WriteAsync(ctx);
-        return Results.Empty;
+        var file=await guide.OpenGuideAsync(ctx.RequestAborted);
+        if(file is null)return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        return Results.File(file,"application/xml; charset=utf-8",enableRangeProcessing:false);
     }
     private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide)
     {
