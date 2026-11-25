@@ -68,6 +68,7 @@ public sealed class LogicalChannel
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public string MatchKey { get; set; } = "";
+    public int PreferredStreamId { get; set; }
     public string Country { get; set; } = "";
     public bool Manual { get; set; }
 }

@@ -34,5 +34,5 @@ public sealed class ChannelGroups : Migration
         migrationBuilder.DropTable("ChannelGroups");
         migrationBuilder.DropTable("PublicationSettings");
     }
-    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder, true, true, false);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder, true, true, false, false);
 }

@@ -13,6 +13,7 @@ jobs:
           dotnet-version: '10.0.x'
       - run: dotnet build src/IPTVProxy/IPTVProxy.csproj -c Release
       - run: dotnet run --project tests/BufferChecks/BufferChecks.csproj -c Release
+      - run: dotnet run --project tests/CatalogChecks/CatalogChecks.csproj -c Release
       - run: docker build -t iptvproxy:ci .
       - name: Container smoke test
         shell: bash

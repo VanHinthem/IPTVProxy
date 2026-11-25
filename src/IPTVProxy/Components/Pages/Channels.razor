@@ -19,10 +19,12 @@
 @if (selected != 0)
 {
     <h2>Bronstreams voor kanaal @selected</h2>
+    <p>Voorkeursbron: @(preferred == 0 ? "Automatisch" : preferred.ToString()) <button @onclick="() => Prefer(0)">Automatisch</button></p>
+    <label>Naam <input @bind="channelName" /></label><button @onclick="Rename">Naam opslaan</button>
     <table><thead><tr><th>Provider</th><th>Originele naam</th><th>Kwaliteit (label)</th><th>Review</th></tr></thead><tbody>
     @foreach(var s in details)
     {
-        <tr><td>@s.Provider</td><td>@s.Name</td><td>@s.Quality</td><td>@s.Review <button @onclick="() => Confirm(s.Id)">Bevestigen</button> <button @onclick="() => Split(s.Id)">Splitsen</button></td></tr>
+        <tr><td>@s.Provider</td><td>@s.Name</td><td>@s.Quality</td><td>@s.Review <button @onclick="() => Prefer(s.Id)">Voorkeur</button> <button @onclick="() => Confirm(s.Id)">Bevestigen</button> <button @onclick="() => Split(s.Id)">Splitsen</button></td></tr>
     }
     </tbody></table>
     <label>Doelkanaal-ID <input type="number" @bind="targetId" /></label>
@@ -41,7 +43,8 @@
     private List<ChannelGroup> groups = [];
     private string search="", message="";
     private bool review;
-    private int page,total,sourceCount,reviewCount,selected,groupId,targetId;
+    private int page,total,sourceCount,reviewCount,selected,groupId,targetId,preferred;
+    private string channelName="";
     protected override async Task OnInitializedAsync() => await Load();
     private async Task Search(){page=0;await Load();}
     private async Task Previous(){if(page>0)page--;await Load();}
@@ -62,7 +65,23 @@
     {
         selected=id;
         await using var db=await Factory.CreateDbContextAsync();
+        var channel=await db.LogicalChannels.AsNoTracking().SingleAsync(x=>x.Id==id);
+        preferred=channel.PreferredStreamId;channelName=channel.Name;
         details=await (from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id where l.LogicalChannelId==id && s.Active orderby p.Priority, l.Quality descending select new Source(s.Id,p.Name,s.Name,l.Quality,l.ReviewRequired)).Take(500).ToListAsync();
+    }
+    private async Task Prefer(int id)
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        if(id!=0 && !await db.ChannelSources.AnyAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected))return;
+        var channel=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
+        channel.PreferredStreamId=id;await db.SaveChangesAsync();await Details(selected);
+    }
+    private async Task Rename()
+    {
+        if(string.IsNullOrWhiteSpace(channelName))return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var channel=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
+        channel.Name=channelName.Trim();await db.SaveChangesAsync();await Load();
     }
     private async Task Confirm(int id)
     {
@@ -77,6 +96,7 @@
         var link=await db.ChannelSources.SingleAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected);
         var old=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
         old.Manual=true;
+        if(old.PreferredStreamId==id)old.PreferredStreamId=0;
         link.LogicalChannel=new LogicalChannel{Name=link.NormalizedName,Country=link.Country,MatchKey=old.MatchKey,Manual=true};
         link.Manual=true;link.ReviewRequired=false;
         await db.SaveChangesAsync();await Details(selected);await Load();
@@ -89,9 +109,17 @@
         var old=await db.LogicalChannels.FindAsync(selected);
         if(target is null || old is null){message="Doelkanaal niet gevonden.";return;}
         old.Manual=true;target.Manual=true;
+        if(target.PreferredStreamId==0)target.PreferredStreamId=old.PreferredStreamId;
+        old.PreferredStreamId=0;
+        var targetOverrides=await db.GroupOverrides.Where(x=>x.ChannelId==targetId).ToDictionaryAsync(x=>x.GroupId);
+        foreach(var ov in await db.GroupOverrides.Where(x=>x.ChannelId==selected).ToListAsync())
+        {
+            if(!targetOverrides.ContainsKey(ov.GroupId))db.GroupOverrides.Add(new GroupOverride{GroupId=ov.GroupId,ChannelId=targetId,Include=ov.Include});
+            // Existing target override wins; retain old override on old channel for audit.
+        }
         foreach(var link in await db.ChannelSources.Where(x=>x.LogicalChannelId==selected).ToListAsync())
         {link.LogicalChannelId=targetId;link.Manual=true;link.ReviewRequired=false;}
-        await db.SaveChangesAsync();message="Bronnen verplaatst; groepsinstellingen van het oude kanaal blijven bewaard.";
+        await db.SaveChangesAsync();message="Bronnen verplaatst; groepsuitzonderingen overgenomen tenzij het doel al een uitzondering heeft.";
         await Details(targetId);await Load();
     }
     private async Task Override(bool? include)

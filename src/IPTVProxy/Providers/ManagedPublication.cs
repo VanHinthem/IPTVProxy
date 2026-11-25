@@ -19,18 +19,18 @@ public static class ManagedPublication
         join s in db.LiveStreams.AsNoTracking() on link.LiveStreamId equals s.Id
         join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id
         join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
-        where s.Active && p.Enabled && c.Active
+        where s.Active && p.Enabled && c.Active && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
         select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId);
 
-    public static Candidate[] Rank(ChannelGroup group, IEnumerable<Candidate> candidates)
+    public static Candidate[] Rank(ChannelGroup group, IEnumerable<Candidate> candidates, int preferredStreamId = 0)
     {
         var eligible = candidates.Where(c => group.ProviderId == 0 || c.ProviderId == group.ProviderId).ToArray();
         var known = eligible.Where(c => c.Quality > 0 && c.Quality >= group.MinimumQuality).ToArray();
         var unknown = eligible.Where(c => c.Quality == 0).ToArray();
         var lower = eligible.Where(c => c.Quality > 0 && c.Quality < group.MinimumQuality).ToArray();
         IEnumerable<Candidate> Sort(IEnumerable<Candidate> values) => group.QualityFirst
-            ? values.OrderByDescending(c => c.Quality).ThenBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenBy(c => c.StreamId)
-            : values.OrderBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenByDescending(c => c.Quality).ThenBy(c => c.StreamId);
+            ? values.OrderByDescending(c => c.StreamId == preferredStreamId).ThenByDescending(c => c.Quality).ThenBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenBy(c => c.StreamId)
+            : values.OrderByDescending(c => c.StreamId == preferredStreamId).ThenBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenByDescending(c => c.Quality).ThenBy(c => c.StreamId);
         // Unknown is only a fallback; not equivalent to satisfying a quality constraint.
         return Sort(known).Concat(group.MinimumQuality == 0 || group.UnknownFallback ? Sort(unknown) : [])
             .Concat(group.LowerFallback ? Sort(lower) : []).ToArray();
@@ -43,7 +43,7 @@ public static class ManagedPublication
         var sources = candidates.Where(c => manual == true ||
             ((string.IsNullOrWhiteSpace(group.Country) || group.Country.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Contains(c.Country, StringComparer.OrdinalIgnoreCase))
              && Contains(c.Category, group.CategoryContains)));
-        return Rank(group, sources);
+        return Rank(group, sources, channel.PreferredStreamId);
     }
     public static async Task<List<Published>> ListAsync(CatalogDb db, int? groupId, CancellationToken ct)
     {

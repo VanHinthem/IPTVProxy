@@ -12,11 +12,11 @@
 <p><a href="/channels">Kanaalbeheer</a> · <a href="/groups">Groepen en publicatie</a></p>
 <h2>Providers</h2>
 <table style="width:100%;text-align:left">
-<thead><tr><th>Naam</th><th>Kanalen</th><th>Limiet</th><th>Actie</th></tr></thead>
+<thead><tr><th>Naam</th><th>Kanalen</th><th>Limiet</th><th>Prioriteit (laagste eerst)</th><th>Actie</th></tr></thead>
 <tbody>
 @foreach (var p in providers)
 {
-    <tr><td>@p.Name</td><td>@p.Count</td><td>@p.Limit</td>
+    <tr><td>@p.Name</td><td>@p.Count</td><td>@p.Limit</td><td><input type="number" min="0" max="9999" @bind="p.Priority" /><button disabled="@busy" @onclick="() => SavePriority(p)">Opslaan</button></td>
     <td><button disabled="@busy" @onclick="() => Import(p.Id)">Importeren</button></td></tr>
 }
 </tbody>
@@ -37,7 +37,7 @@
 <p>Gebruiker: @(Config["Accounts:IptvName"] ?? "viewer")</p>
 <p>Gebruik het afzonderlijke IPTV-wachtwoord uit je lokale configuratie.</p>
 @code {
-    private record ProviderRow(int Id, string Name, int Count, int Limit);
+    private sealed record ProviderRow(int Id, string Name, int Count, int Limit, int InitialPriority) { public int Priority { get; set; } = InitialPriority; }
     private List<ProviderRow> providers = new();
     private string name = "", origin = "", username = "", password = "", status = "";
     private int limit = 1;
@@ -47,7 +47,15 @@
     {
         await using var db = await Factory.CreateDbContextAsync();
         providers = await db.Providers.AsNoTracking().OrderBy(p => p.Id)
-            .Select(p => new ProviderRow(p.Id, p.Name, db.LiveStreams.Count(s => s.ProviderId == p.Id && s.Active), p.ConnectionLimit)).ToListAsync();
+            .Select(p => new ProviderRow(p.Id, p.Name, db.LiveStreams.Count(s => s.ProviderId == p.Id && s.Active), p.ConnectionLimit,p.Priority)).ToListAsync();
+    }
+    private async Task SavePriority(ProviderRow row)
+    {
+        if(row.Priority < 0 || row.Priority > 9999) {status="Kies een prioriteit tussen 0 en 9999.";return;}
+        await using var db=await Factory.CreateDbContextAsync();
+        var provider=await db.Providers.FindAsync(row.Id);
+        if(provider is null)return;
+        provider.Priority=row.Priority;await db.SaveChangesAsync();status="Prioriteit opgeslagen.";await Refresh();
     }
     private async Task Add()
     {

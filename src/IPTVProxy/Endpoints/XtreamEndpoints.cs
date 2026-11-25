@@ -15,7 +15,7 @@ public static class XtreamEndpoints
         app.MapGet("/{username}/{password}/{id:int}", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");
     }
 
-    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config)
+    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg)
     {
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
@@ -29,7 +29,8 @@ public static class XtreamEndpoints
                       join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
                       where s.Active && c.Active
                       select new { s, p, c };
-        if (await ManagedPublication.IsEnabled(db, ct))
+        var managed = await ManagedPublication.IsEnabled(db, ct);
+        if (managed)
         {
             if (q["action"] == "get_live_categories")
                 return Results.Json(await db.ChannelGroups.AsNoTracking().Where(g => g.Enabled).OrderBy(g => g.SortOrder).ThenBy(g => g.Id)
@@ -45,7 +46,7 @@ public static class XtreamEndpoints
                 var published = await ManagedPublication.ListAsync(db, groupId, ct);
                 return Results.Json(published.Select((x,i) => new {
                     num = i + 1, name = x.Name, stream_type = "live", stream_id = x.Id,
-                    stream_icon = "", epg_channel_id = "", category_id = x.GroupId.ToString(),
+                    stream_icon = "", epg_channel_id = "iptvproxy." + x.ChannelId, category_id = x.GroupId.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
                 }));
             }
@@ -78,13 +79,22 @@ public static class XtreamEndpoints
                 }
                 return Results.Json(await streams.OrderBy(x => x.s.Id).Select(x => new {
                     num = x.s.Id, name = x.s.Name, stream_type = "live", stream_id = x.s.Id,
-                    stream_icon = "", epg_channel_id = "", category_id = x.c.Id.ToString(),
+                    stream_icon = "", epg_channel_id = x.s.EpgId, category_id = x.c.Id.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
                 }).ToListAsync(ct));
             case "get_vod_categories": case "get_vod_streams": case "get_series_categories": case "get_series":
                 return Results.Json(Array.Empty<object>());
             case "get_short_epg": case "get_simple_data_table":
-                return Results.Json(new { epg_listings = Array.Empty<object>() });
+                if(!int.TryParse(q["stream_id"],out var requested))return Results.Json(new {epg_listings=Array.Empty<object>()});
+                var limit=int.TryParse(q["limit"],out var count)?Math.Clamp(count,1,100):10;
+                int[] sourceIds;
+                if(managed)
+                {
+                    var candidates=await ManagedPublication.ResolveAsync(db,requested,ct);
+                    sourceIds=candidates.OrderByDescending(c=>!string.IsNullOrWhiteSpace(c.EpgId)).Select(c=>c.StreamId).ToArray();
+                }
+                else sourceIds=await streams.Where(x=>x.s.Id==requested).Select(x=>x.s.Id).ToArrayAsync(ct);
+                return Results.Json(new {epg_listings=await epg.GetAsync(sourceIds,limit,ct)});
             default:
                 return Results.BadRequest();
         }

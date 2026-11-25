@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -94,6 +94,7 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             e.Property(x => x.Id).ValueGeneratedOnAdd();
             e.Property(x => x.Name).IsRequired();
             e.Property(x => x.MatchKey).IsRequired();
+            if (preferences) e.Property(x => x.PreferredStreamId); else e.Ignore(x => x.PreferredStreamId);
             e.Property(x => x.Country).IsRequired();
             e.Property(x => x.Manual);
             e.HasIndex(x => x.MatchKey);
