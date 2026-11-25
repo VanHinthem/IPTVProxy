@@ -49,7 +49,7 @@
     {
         await using var db = await Factory.CreateDbContextAsync();
         var rows = await ManagedPublication.ListAsync(db,id,CancellationToken.None);
-        previewCount = rows.Count; previewNames = rows.Take(30).Select(x => x.Name + " — " + x.Source.Name).ToList();
+        previewCount = rows.Count; previewNames = rows.Take(30).Select(x => x.Name + " — " + x.Source.Name + " (provider " + x.Source.ProviderId + ", " + (x.Source.Quality==0?"kwaliteit onbekend":x.Source.Quality.ToString()) + ")").ToList();
     }
     private string message = "";
     protected override async Task OnInitializedAsync() => await Load();
@@ -76,7 +76,7 @@
     {
         var enabled = e.Value is true;
         await using var db = await Factory.CreateDbContextAsync();
-        if (enabled && (await ManagedPublication.ListAsync(db,null,CancellationToken.None)).Count == 0) { message="Maak eerst een actieve groep."; return; }
+        if (enabled && (await ManagedPublication.ListAsync(db,null,CancellationToken.None)).Count == 0) { message="Maak eerst een actieve groep met publiceerbare kanalen."; await Load(); return; }
         var settings = await db.PublicationSettings.SingleAsync(x => x.Id == 1);
         settings.Managed = enabled; await db.SaveChangesAsync(); await Load();
     }

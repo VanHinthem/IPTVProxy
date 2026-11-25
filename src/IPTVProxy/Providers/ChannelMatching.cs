@@ -24,7 +24,7 @@ public static class ChannelMatching
             {
                 // Never move an existing source automatically; a changed identity needs review.
                 var channel = byId.GetValueOrDefault(link.LogicalChannelId);
-                if (!link.Manual && channel is not null && channel.MatchKey != metadata.MatchKey)
+                if (!link.Manual && channel is not null && (channel.MatchKey != metadata.MatchKey || (metadata.MatchKey == "" && !string.Equals(link.NormalizedName, metadata.Name, StringComparison.OrdinalIgnoreCase))))
                     link.ReviewRequired = true;
             }
             else

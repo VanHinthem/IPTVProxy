@@ -49,7 +49,7 @@ public static class ManagedPublication
     {
         var groups = await db.ChannelGroups.AsNoTracking().Where(g => g.Enabled && (groupId == null || g.Id == groupId)).OrderBy(g => g.SortOrder).ThenBy(g => g.Id).ToListAsync(ct);
         if (groups.Count == 0) return [];
-        var channels = await db.LogicalChannels.AsNoTracking().OrderBy(c => c.Name).ThenBy(c => c.Id).ToListAsync(ct);
+        var channels = await db.LogicalChannels.AsNoTracking().Where(c=>db.ChannelSources.Any(l=>l.LogicalChannelId==c.Id && db.LiveStreams.Any(s=>s.Id==l.LiveStreamId && s.Active))).OrderBy(c => c.Name).ThenBy(c => c.Id).ToListAsync(ct);
         var sources = (await Candidates(db).ToListAsync(ct)).ToLookup(c => c.ChannelId);
         var overrides = (await db.GroupOverrides.AsNoTracking().ToListAsync(ct)).ToDictionary(x => (x.GroupId,x.ChannelId), x => x.Include);
         var result = new List<Published>();

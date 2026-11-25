@@ -1,0 +1,49 @@
+@page "/diagnostics"
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.EntityFrameworkCore
+@using IPTVProxy.Data
+@inject IDbContextFactory<CatalogDb> Factory
+<PageTitle>Matchingdiagnostiek — IPTVProxy</PageTitle>
+<p><a href="/">Providers</a> · <a href="/channels">Kanalen</a> · <a href="/groups">Groepen</a></p>
+<h1>Matchingdiagnostiek</h1>
+<p>Kwaliteit en land zijn afgeleid uit namen; niet technisch gemeten. Onbekende identiteit is geen bewezen fout.</p>
+<h2>Per provider</h2>
+<table><thead><tr><th>Provider</th><th>Bronnen</th><th>Onbekend land</th><th>Onbekende kwaliteit</th><th>Review</th></tr></thead><tbody>
+@foreach(var r in providers){<tr><td>@r.Name</td><td>@r.Total</td><td>@r.UnknownCountry</td><td>@r.UnknownQuality</td><td>@r.Review</td></tr>}
+</tbody></table>
+<h2>Originele categorieën</h2>
+<label>Provider <select @bind="providerId"><option value="0">Alle</option>@foreach(var r in providers){<option value="@r.Id">@r.Name</option>}</select></label>
+<label>Naam bevat <input @bind="search" /></label><button @onclick="Search">Zoeken</button>
+<table><thead><tr><th>Provider</th><th>Categorie</th><th>Bronnen</th><th>Onbekend land</th><th>Onbekende kwaliteit</th><th>Review</th><th></th></tr></thead><tbody>
+@foreach(var r in categories){<tr><td>@r.Provider</td><td>@r.Name</td><td>@r.Total</td><td>@r.UnknownCountry</td><td>@r.UnknownQuality</td><td>@r.Review</td><td><button @onclick="()=>Samples(r.ProviderId,r.SourceId)">Voorbeelden</button></td></tr>}
+</tbody></table>
+<button disabled="@(page==0)" @onclick="Previous">Vorige</button> Pagina @(page+1) <button disabled="@(categories.Count<50)" @onclick="Next">Volgende</button>
+@if(samples.Count>0){
+<h2>Voorbeelden uit categorie</h2>
+<table><thead><tr><th>Origineel</th><th>Genormaliseerd</th><th>Land</th><th>Kwaliteit</th><th>Review</th></tr></thead><tbody>
+@foreach(var s in samples){<tr><td>@s.Original</td><td>@s.Normalized</td><td>@s.Country</td><td>@s.Quality</td><td>@s.Review</td></tr>}
+</tbody></table>}
+@code{
+    private record ProviderRow(int Id,string Name,int Total,int UnknownCountry,int UnknownQuality,int Review);
+    private record CategoryRow(int ProviderId,string SourceId,string Provider,string Name,int Total,int UnknownCountry,int UnknownQuality,int Review);
+    private record Sample(string Original,string Normalized,string Country,int Quality,bool Review);
+    private List<ProviderRow> providers=[];
+    private List<CategoryRow> categories=[];
+    private List<Sample> samples=[];
+    private int providerId,page;
+    private string search="";
+    protected override async Task OnInitializedAsync()=>await Load();
+    private async Task Search(){page=0;samples=[];await Load();}
+    private async Task Previous(){if(page>0)page--;await Load();}
+    private async Task Next(){page++;await Load();}
+    private async Task Load(){
+        await using var db=await Factory.CreateDbContextAsync();
+        var q=from s in db.LiveStreams.AsNoTracking() join l in db.ChannelSources.AsNoTracking() on s.Id equals l.LiveStreamId join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id join c in db.LiveCategories.AsNoTracking() on new{s.ProviderId,SourceId=s.CategoryId} equals new{c.ProviderId,c.SourceId} where s.Active && c.Active select new{s,l,p,c};
+        providers=await q.GroupBy(x=>new{x.p.Id,x.p.Name}).OrderBy(g=>g.Key.Name).Select(g=>new ProviderRow(g.Key.Id,g.Key.Name,g.Count(),g.Count(x=>x.l.Country==""),g.Count(x=>x.l.Quality==0),g.Count(x=>x.l.ReviewRequired))).ToListAsync();
+        categories=await q.Where(x=>(providerId==0||x.p.Id==providerId)&&x.c.Name.Contains(search)).GroupBy(x=>new{x.p.Id,Provider=x.p.Name,x.c.SourceId,x.c.Name}).OrderByDescending(g=>g.Count()).ThenBy(g=>g.Key.Id).ThenBy(g=>g.Key.SourceId).Skip(page*50).Take(50).Select(g=>new CategoryRow(g.Key.Id,g.Key.SourceId,g.Key.Provider,g.Key.Name,g.Count(),g.Count(x=>x.l.Country==""),g.Count(x=>x.l.Quality==0),g.Count(x=>x.l.ReviewRequired))).ToListAsync();
+    }
+    private async Task Samples(int id,string cat){
+        await using var db=await Factory.CreateDbContextAsync();
+        samples=await (from s in db.LiveStreams.AsNoTracking() join l in db.ChannelSources.AsNoTracking() on s.Id equals l.LiveStreamId where s.Active && s.ProviderId==id && s.CategoryId==cat orderby l.ReviewRequired descending,s.Name select new Sample(s.Name,l.NormalizedName,l.Country,l.Quality,l.ReviewRequired)).Take(50).ToListAsync();
+    }
+}

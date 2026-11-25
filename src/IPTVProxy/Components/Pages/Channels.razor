@@ -6,8 +6,11 @@
 <PageTitle>Kanalen — IPTVProxy</PageTitle>
 <p><a href="/">Providers</a> · <a href="/groups">Groepen</a></p>
 <h1>Logische kanalen</h1>
-<p>@total logische kanalen · @sourceCount actieve bronstreams · @reviewCount te beoordelen bronkoppelingen</p>
+<div class="summary"><span><strong>@total</strong> actieve logische kanalen</span><span><strong>@sourceCount</strong> actieve bronstreams</span><span><strong>@multiCount</strong> kanalen met meerdere bronnen</span><span><strong>@reviewCount</strong> bronkoppelingen ter beoordeling</span></div>
+<p><a href="/diagnostics">Matchingdiagnostiek per provider en categorie</a></p>
 <label>Zoeken <input @bind="search" /></label>
+<label>Land <select @bind="country"><option value="">Alle</option><option value="?">Onbekend</option>@foreach(var c in countries){<option value="@c">@c</option>}</select></label>
+<label><input type="checkbox" @bind="multiple" /> Meerdere bronnen</label>
 <label><input type="checkbox" @bind="review" /> Alleen te beoordelen</label>
 <button @onclick="Search">Zoeken</button>
 <table><thead><tr><th>ID</th><th>Naam</th><th>Land</th><th>Bronnen</th><th></th></tr></thead><tbody>
@@ -43,7 +46,10 @@
     private List<Source> details = [];
     private List<ChannelGroup> groups = [];
     private string search="", message="";
-    private bool review;
+    private bool review,multiple;
+    private string country="";
+    private List<string> countries=[];
+    private int multiCount;
     private int page,total,sourceCount,reviewCount,selected,groupId,targetId,preferred;
     private string channelName="";
     protected override async Task OnInitializedAsync() => await Load();
@@ -56,8 +62,12 @@
         var activeLinks=from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id where s.Active select l;
         sourceCount=await db.LiveStreams.CountAsync(x=>x.Active);
         reviewCount=await activeLinks.CountAsync(x=>x.ReviewRequired);
-        total=await db.LogicalChannels.CountAsync();
-        var q=db.LogicalChannels.AsNoTracking().Where(c=>c.Name.Contains(search));
+        total=await activeLinks.Select(l=>l.LogicalChannelId).Distinct().CountAsync();
+        multiCount=await activeLinks.GroupBy(l=>l.LogicalChannelId).Where(g=>g.Count()>1).CountAsync();
+        countries=await activeLinks.Select(l=>l.Country).Where(c=>c!="").Distinct().OrderBy(c=>c).ToListAsync();
+        var q=db.LogicalChannels.AsNoTracking().Where(c=>c.Name.Contains(search) && activeLinks.Any(l=>l.LogicalChannelId==c.Id));
+        if(country!="")q=q.Where(c=>c.Country==(country=="?"?"":country));
+        if(multiple)q=q.Where(c=>activeLinks.Count(l=>l.LogicalChannelId==c.Id)>1);
         if(review)q=q.Where(c=>activeLinks.Any(l=>l.LogicalChannelId==c.Id && l.ReviewRequired));
         rows=await q.OrderBy(c=>c.Name).ThenBy(c=>c.Id).Skip(page*100).Take(100).Select(c=>new Row(c.Id,c.Name,c.Country,activeLinks.Count(l=>l.LogicalChannelId==c.Id))).ToListAsync();
         groups=await db.ChannelGroups.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
@@ -96,11 +106,17 @@
         await using var db=await Factory.CreateDbContextAsync();
         var link=await db.ChannelSources.SingleAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected);
         var old=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
+        if(await db.ChannelSources.CountAsync(x=>x.LogicalChannelId==selected)<=1){message="Dit kanaal heeft slechts één bron.";return;}
         old.Manual=true;
         if(old.PreferredStreamId==id)old.PreferredStreamId=0;
-        link.LogicalChannel=new LogicalChannel{Name=link.NormalizedName,Country=link.Country,MatchKey=old.MatchKey,Manual=true};
+        var split=new LogicalChannel{Name=link.NormalizedName,Country=link.Country,MatchKey=old.MatchKey,Manual=true};
+        link.LogicalChannel=split;
         link.Manual=true;link.ReviewRequired=false;
-        await db.SaveChangesAsync();await Details(selected);await Load();
+        await using var tx=await db.Database.BeginTransactionAsync();
+        await db.SaveChangesAsync();
+        foreach(var ov in await db.GroupOverrides.AsNoTracking().Where(x=>x.ChannelId==selected).ToListAsync())
+            db.GroupOverrides.Add(new GroupOverride{GroupId=ov.GroupId,ChannelId=split.Id,Include=ov.Include});
+        await db.SaveChangesAsync();await tx.CommitAsync();await Details(selected);await Load();
     }
     private async Task Merge()
     {
