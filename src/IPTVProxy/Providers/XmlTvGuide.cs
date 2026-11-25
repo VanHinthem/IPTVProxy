@@ -22,6 +22,7 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
             {
                 try{await ImportAsync(p,ct);}
                 catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
+                catch(HttpRequestException ex){log.LogWarning("XMLTV import failed for provider {ProviderId}: HTTP {Status}, {ErrorType}",p.Id,ex.StatusCode is null?"unknown":((int)ex.StatusCode.Value).ToString(),ex.HttpRequestError);}
                 catch(Exception ex){log.LogWarning("XMLTV import failed for provider {ProviderId}: {ErrorType}",p.Id,ex.GetType().Name);}
             }
         }
@@ -34,7 +35,7 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         var credentials=catalog.Credentials(p);
         var uri=new Uri(LiveCatalog.ValidateBase(p.BaseUrl),"xmltv.php?username="+Uri.EscapeDataString(credentials.Username)+"&password="+Uri.EscapeDataString(credentials.Password));
         using var client=clients.CreateClient("provider");
-        using var response=await client.GetAsync(uri,HttpCompletionOption.ResponseHeadersRead,token);
+        using var response=await FetchAsync(client,uri,p.Id,token);
         response.EnsureSuccessStatusCode();
         await using var body=await response.Content.ReadAsStreamAsync(token);
         // Bound compressed and uncompressed input; no DTD/network entity resolution.
@@ -84,6 +85,66 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         cmd.Parameters.AddWithValue("$p",p.Id);cmd.Parameters.AddWithValue("$updated",now.ToString("O"));cmd.Parameters.AddWithValue("$count",entries.Count);await cmd.ExecuteNonQueryAsync(token);
         await tx.CommitAsync(token);
         log.LogInformation("XMLTV imported for provider {ProviderId}: {Count} programmes",p.Id,entries.Count);
+    }
+    private async Task<HttpResponseMessage> FetchAsync(HttpClient client,Uri uri,int providerId,CancellationToken ct)
+    {
+        for(var hop=0;hop<=5;hop++)
+        {
+            var response=await client.GetAsync(uri,HttpCompletionOption.ResponseHeadersRead,ct);
+            var status=(int)response.StatusCode;
+            if(status is not (301 or 302 or 303 or 307 or 308))return response;
+            using(response)
+            {
+                var location=response.Headers.Location;
+                if(location is null||hop==5)throw new HttpRequestException("XMLTV redirect missing or limit exceeded",null,response.StatusCode);
+                var next=new Uri(uri,location);
+                if(next.Scheme is not ("http" or "https") || next.UserInfo.Length!=0 || next.IsLoopback ||
+                    (uri.Scheme=="https"&&next.Scheme!="https"))
+                    throw new HttpRequestException("Unsafe XMLTV redirect",null,response.StatusCode);
+                // Do not copy credentials or headers to a redirected URL. The provider supplies Location.
+                // All actual connections still use the public-address-only provider handler.
+                log.LogInformation("XMLTV redirect {Hop} for provider {ProviderId}: HTTP {Status}",hop+1,providerId,status);
+                uri=next;
+            }
+        }
+        throw new InvalidOperationException("Unreachable redirect state");
+    }
+    public async Task<ProviderEpg.Listing[]> GetListingsAsync(int[] sourceIds,int limit,bool full,CancellationToken ct)
+    {
+        if(sourceIds.Length==0)return [];
+        await using var db=await factory.CreateDbContextAsync(ct);
+        var sources=await (from s in db.LiveStreams.AsNoTracking()
+            join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id
+            where sourceIds.Contains(s.Id)&&s.Active&&p.Enabled&&s.EpgId!=""
+            orderby p.Priority,p.Id,s.Id
+            select new {s.ProviderId,s.EpgId}).Distinct().ToListAsync(ct);
+        await db.Database.OpenConnectionAsync(ct);
+        var connection=(SqliteConnection)db.Database.GetDbConnection();
+        await using var cmd=connection.CreateCommand();
+        cmd.CommandText="SELECT Start,Stop,Title,Description FROM EpgPrograms WHERE ProviderId=$p AND EpgId=$id AND Stop>$now ORDER BY Start LIMIT $limit";
+        cmd.Parameters.AddWithValue("$p",0);cmd.Parameters.AddWithValue("$id","");
+        var now=DateTimeOffset.UtcNow;
+        cmd.Parameters.AddWithValue("$now",(full?now.AddHours(-6):now).ToString("O"));
+        cmd.Parameters.AddWithValue("$limit",Math.Clamp(limit,1,100));
+        foreach(var source in sources)
+        {
+            cmd.Parameters["$p"].Value=source.ProviderId;cmd.Parameters["$id"].Value=source.EpgId;
+            await using var rows=await cmd.ExecuteReaderAsync(ct);
+            var result=new List<ProviderEpg.Listing>();
+            while(await rows.ReadAsync(ct))
+            {
+                var start=DateTimeOffset.Parse(rows.GetString(0),CultureInfo.InvariantCulture).ToUniversalTime();
+                var stop=DateTimeOffset.Parse(rows.GetString(1),CultureInfo.InvariantCulture).ToUniversalTime();
+                result.Add(new ProviderEpg.Listing(start.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes(rows.GetString(2))),
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes(rows.GetString(3))),
+                    start.ToString("yyyy-MM-dd HH:mm:ss",CultureInfo.InvariantCulture),
+                    stop.ToString("yyyy-MM-dd HH:mm:ss",CultureInfo.InvariantCulture),
+                    start.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),stop.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),""));
+            }
+            if(result.Count>0)return result.ToArray();
+        }
+        return [];
     }
     public static DateTimeOffset? Time(string? value)
     {

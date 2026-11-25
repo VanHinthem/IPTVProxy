@@ -24,7 +24,7 @@ public static class XtreamEndpoints
         await guide.WriteAsync(ctx);
         return Results.Empty;
     }
-    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg)
+    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide)
     {
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
@@ -95,15 +95,17 @@ public static class XtreamEndpoints
                 return Results.Json(Array.Empty<object>());
             case "get_short_epg": case "get_simple_data_table":
                 if(!int.TryParse(q["stream_id"],out var requested))return Results.Json(new {epg_listings=Array.Empty<object>()});
-                var limit=int.TryParse(q["limit"],out var count)?Math.Clamp(count,1,100):10;
+                var limit=int.TryParse(q["limit"],out var count)?Math.Clamp(count,1,100):q["action"]=="get_simple_data_table"?100:10;
                 int[] sourceIds;
                 if(managed)
                 {
                     var candidates=await ManagedPublication.ResolveAsync(db,requested,ct);
-                    sourceIds=candidates.OrderByDescending(c=>!string.IsNullOrWhiteSpace(c.EpgId)).Select(c=>c.StreamId).ToArray();
+                    sourceIds=candidates.Length==0?[]:(await ManagedPublication.Candidates(db,candidates[0].ChannelId).ToListAsync(ct)).OrderByDescending(c=>!string.IsNullOrWhiteSpace(c.EpgId)).ThenBy(c=>c.Priority).ThenBy(c=>c.ProviderId).Select(c=>c.StreamId).ToArray();
                 }
                 else sourceIds=await streams.Where(x=>x.s.Id==requested).Select(x=>x.s.Id).ToArrayAsync(ct);
-                return Results.Json(new {epg_listings=await epg.GetAsync(sourceIds,limit,ct)});
+                var listings=await guide.GetListingsAsync(sourceIds,limit,q["action"]=="get_simple_data_table",ct);
+                if(listings.Length==0)listings=await epg.GetAsync(sourceIds,limit,ct);
+                return Results.Json(new {epg_listings=listings});
             default:
                 return Results.BadRequest();
         }
