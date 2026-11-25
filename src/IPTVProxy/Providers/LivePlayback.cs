@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using IPTVProxy.Data;
 using IPTVProxy.Security;
 using Microsoft.EntityFrameworkCore;
@@ -9,12 +8,15 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
 {
     private readonly object gate = new();
     private readonly Dictionary<int, Session> sessions = new();
-    private sealed class Session(int id, int providerId)
+    private sealed class Session
     {
-        public int Id { get; } = id;
-        public int ProviderId { get; } = providerId;
+        public Session(int id, int providerId) { Id = id; ProviderId = providerId; StopToken = Stop.Token; }
+        public int Id { get; }
+        public int ProviderId { get; }
         public CancellationTokenSource Stop { get; } = new();
-        public HashSet<Channel<byte[]>> Subscribers { get; } = new();
+        public CancellationToken StopToken { get; }
+        public int Subscribers { get; set; }
+        public SharedStreamBuffer Buffer { get; } = new(32 * 1024 * 1024 / 188 * 188);
         public bool Closing { get; set; }
         public TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -50,9 +52,6 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         if (stream is null) { ctx.Response.StatusCode = 404; return; }
         var provider = await db.Providers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stream.ProviderId && x.Enabled, ctx.RequestAborted);
         if (provider is null) { ctx.Response.StatusCode = 404; return; }
-        var subscriber = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(512) {
-            SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.Wait
-        });
         Session session;
         bool start = false;
         var allowSwitch = provider.ConnectionLimit == 1 &&
@@ -69,9 +68,9 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                     if (existing.Closing) release = existing.Released.Task;
                     else
                     {
-                        if (existing.Subscribers.Count >= 16) { ctx.Response.StatusCode = 503; return; }
+                        if (existing.Subscribers >= 16) { ctx.Response.StatusCode = 503; return; }
                         session = existing;
-                        session.Subscribers.Add(subscriber);
+                        session.Subscribers++;
                         break;
                     }
                 }
@@ -82,7 +81,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                     {
                         session = new Session(id, provider.Id);
                         sessions.Add(id, session);
-                        session.Subscribers.Add(subscriber);
+                        session.Subscribers++;
                         start = true;
                         break;
                     }
@@ -111,35 +110,39 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             }
         }
         log.LogInformation("Stream {StreamId}: new upstream {NewUpstream}", id, start);
+        // Start with up to 1 MiB of recent history, without delaying cold starts.
+        var cursor = session.Buffer.StartPosition(1024 * 1024);
         if (start) _ = Pump(session, provider, stream.SourceId);
         try
         {
             ctx.Response.ContentType = "video/mp2t";
             ctx.Response.Headers.CacheControl = "no-store";
             ctx.Response.Headers["X-Accel-Buffering"] = "no";
-            var writer = ctx.Response.BodyWriter;
-            while (await subscriber.Reader.WaitToReadAsync(ctx.RequestAborted))
+            var output = new byte[188 * 348]; // ~64 KiB, packet aligned
+            using var playbackStop = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, session.StopToken);
+            var ct = playbackStop.Token;
+            while (!ct.IsCancellationRequested)
             {
-                // Coalesce available chunks without waiting for a batch to fill.
-                var bytes = 0;
-                while (bytes < 256 * 1024 && subscriber.Reader.TryRead(out var chunk))
+                var read = session.Buffer.Read(cursor, output);
+                cursor = read.Next;
+                if (read.Skipped > 0)
+                    log.LogWarning("Subscriber overrun for stream {StreamId}: skipped {Bytes} bytes", id, read.Skipped);
+                if (read.Count == 0)
                 {
-                    chunk.AsSpan().CopyTo(writer.GetSpan(chunk.Length));
-                    writer.Advance(chunk.Length);
-                    bytes += chunk.Length;
+                    if (read.Completed) break;
+                    await read.Changed.WaitAsync(ct);
+                    continue;
                 }
-                if (bytes == 0) continue;
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeout.CancelAfter(TimeSpan.FromSeconds(20));
-                var flush = await writer.FlushAsync(timeout.Token);
-                if (flush.IsCanceled || flush.IsCompleted) break;
+                await ctx.Response.Body.WriteAsync(output.AsMemory(0, read.Count), timeout.Token);
             }
             if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 502;
         }
         catch (Exception ex)
         {
-            if (!ctx.RequestAborted.IsCancellationRequested)
-                log.LogWarning("Subscriber failed for stream {StreamId}: {ErrorType}, queue overflow {Overflow}", id, ex.GetType().Name, ex is IOException && ex.Message == "Subscriber too slow.");
+            if (!ctx.RequestAborted.IsCancellationRequested && !session.StopToken.IsCancellationRequested)
+                log.LogWarning("Subscriber failed for stream {StreamId}: {ErrorType}", id, ex.GetType().Name);
             if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 502;
             else ctx.Abort();
         }
@@ -147,39 +150,14 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         {
             lock (gate)
             {
-                session.Subscribers.Remove(subscriber);
-                log.LogInformation("Subscriber left stream {StreamId}; remaining {Subscribers}, request aborted {Aborted}", id, session.Subscribers.Count, ctx.RequestAborted.IsCancellationRequested);
-                subscriber.Writer.TryComplete();
-                if (session.Subscribers.Count == 0 && !session.Closing)
+                session.Subscribers--;
+                log.LogInformation("Subscriber left stream {StreamId}; remaining {Subscribers}, request aborted {Aborted}", id, session.Subscribers, ctx.RequestAborted.IsCancellationRequested);
+                if (session.Subscribers == 0 && !session.Closing)
                 {
                     session.Closing = true;
                     session.Stop.Cancel();
                 }
-            }
-        }
-    }
-
-    private async Task EnqueueWithBackpressure(Session session, Channel<byte[]> subscriber, byte[] chunk, CancellationToken ct)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            await subscriber.Writer.WriteAsync(chunk, timeout.Token);
-        }
-        catch (ChannelClosedException) { }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            lock (gate)
-            {
-                if (!session.Subscribers.Remove(subscriber)) return;
-                log.LogWarning("Subscriber queue remained full for five seconds for stream {StreamId}", session.Id);
-                subscriber.Writer.TryComplete(new IOException("Subscriber too slow."));
-                if (session.Subscribers.Count == 0 && !session.Closing)
-                {
-                    session.Closing = true;
-                    session.Stop.Cancel();
-                }
+                if (session.Subscribers == 0 && session.Released.Task.IsCompleted) session.Stop.Dispose();
             }
         }
     }
@@ -216,19 +194,11 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 var total = pending + count;
                 var length = total / 188 * 188;
                 if (length == 0) { pending = total; continue; }
-                var chunk = buffer.AsSpan(0, length).ToArray();
+                session.Buffer.Append(buffer.AsSpan(0, length));
                 pending = total - length;
                 Buffer.BlockCopy(buffer, length, buffer, 0, pending);
                 if (first) { log.LogInformation("First upstream data for stream {StreamId}: {Bytes} bytes", session.Id, length); first = false; }
-                Channel<byte[]>[] targets;
-                lock (gate) targets = session.Subscribers.ToArray();
-                List<Task>? waiting = null;
-                foreach (var sub in targets)
-                {
-                    if (sub.Writer.TryWrite(chunk)) continue;
-                    (waiting ??= new()).Add(EnqueueWithBackpressure(session, sub, chunk, ct));
-                }
-                if (waiting is not null) await Task.WhenAll(waiting);
+
             }
         }
         catch (Exception ex)
@@ -241,10 +211,9 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             lock (gate)
             {
                 session.Closing = true;
-                foreach (var sub in session.Subscribers) sub.Writer.TryComplete();
-                session.Subscribers.Clear();
+                session.Buffer.Complete();
                 sessions.Remove(session.Id);
-                session.Stop.Dispose();
+                if (session.Subscribers == 0) session.Stop.Dispose();
                 session.Released.TrySetResult();
             }
             log.LogInformation("Upstream ended for stream {StreamId}", session.Id);
