@@ -44,6 +44,12 @@ await using (var scope = app.Services.CreateAsyncScope())
     var db = scope.ServiceProvider.GetRequiredService<CatalogDb>();
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
+    if (await db.LiveStreams.AnyAsync(x => x.Active && !db.ChannelSources.Any(l => l.LiveStreamId == x.Id)))
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        await ChannelMatching.ReconcileAsync(db, CancellationToken.None);
+        await transaction.CommitAsync();
+    }
 }
 app.UseRouting();
 app.UseRateLimiter();

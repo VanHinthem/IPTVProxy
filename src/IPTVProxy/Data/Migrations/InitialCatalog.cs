@@ -40,14 +40,14 @@ public sealed class InitialCatalog : Migration
         migrationBuilder.DropTable("LiveStreams");
         migrationBuilder.DropTable("Providers");
     }
-    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder, false);
 }
 
 [DbContext(typeof(CatalogDb))]
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model)
+    internal static void Build(ModelBuilder model, bool managedChannels = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -69,6 +69,8 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             e.Property(x => x.SourceId);
             e.Property(x => x.Name).IsRequired();
             e.Property(x => x.CategoryId).IsRequired();
+            if (managedChannels) { e.Property(x => x.EpgId).IsRequired(); e.Property(x => x.Logo).IsRequired(); }
+            else { e.Ignore(x => x.EpgId); e.Ignore(x => x.Logo); }
             e.Property(x => x.Active);
             e.HasIndex(x => new { x.ProviderId, x.SourceId }).IsUnique();
             e.HasOne<Provider>().WithMany().HasForeignKey(x => x.ProviderId).OnDelete(DeleteBehavior.Cascade);
@@ -84,5 +86,34 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             e.HasIndex(x => new { x.ProviderId, x.SourceId }).IsUnique();
             e.HasOne<Provider>().WithMany().HasForeignKey(x => x.ProviderId).OnDelete(DeleteBehavior.Cascade);
         });
+        if (managedChannels)
+        {
+        model.Entity<LogicalChannel>(e => {
+            e.ToTable("LogicalChannels");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedOnAdd();
+            e.Property(x => x.Name).IsRequired();
+            e.Property(x => x.MatchKey).IsRequired();
+            e.Property(x => x.Country).IsRequired();
+            e.Property(x => x.Manual);
+            e.HasIndex(x => x.MatchKey);
+        });
+        model.Entity<ChannelSource>(e => {
+            e.ToTable("ChannelSources");
+            e.HasKey(x => x.LiveStreamId);
+            e.Property(x => x.LiveStreamId).ValueGeneratedNever();
+            e.Property(x => x.LogicalChannelId);
+            e.Property(x => x.NormalizedName).IsRequired();
+            e.Property(x => x.Country).IsRequired();
+            e.Property(x => x.Quality);
+            e.Property(x => x.Codec).IsRequired();
+            e.Property(x => x.Manual);
+            e.Property(x => x.ReviewRequired);
+            e.HasIndex(x => x.LogicalChannelId);
+            e.HasOne<LiveStream>().WithMany().HasForeignKey(x => x.LiveStreamId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.LogicalChannel).WithMany().HasForeignKey(x => x.LogicalChannelId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        }
     }
 }

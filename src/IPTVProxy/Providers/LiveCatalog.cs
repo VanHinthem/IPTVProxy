@@ -103,7 +103,7 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
             response.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(timeout.Token));
             if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Invalid catalog.");
-            var incoming = new Dictionary<long, (string Name, string Category)>();
+            var incoming = new Dictionary<long, (string Name, string Category, string EpgId, string Logo)>();
             foreach (var item in doc.RootElement.EnumerateArray())
             {
                 if (!long.TryParse(item.GetProperty("stream_id").ToString(), out var id) || id <= 0)
@@ -112,12 +112,15 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
                 if (string.IsNullOrWhiteSpace(name)) throw new InvalidDataException("Invalid stream name.");
                 var cat = item.TryGetProperty("category_id", out var category) ? category.ToString() : "";
                 if (!categories.ContainsKey(cat)) categories[cat] = string.IsNullOrEmpty(cat) ? "Uncategorized" : "Category " + cat;
-                if (!incoming.TryAdd(id, (name, cat))) throw new InvalidDataException("Duplicate stream ID.");
+                var epg = item.TryGetProperty("epg_channel_id", out var epgValue) && epgValue.ValueKind == JsonValueKind.String ? epgValue.GetString() ?? "" : "";
+                var logo = item.TryGetProperty("stream_icon", out var logoValue) && logoValue.ValueKind == JsonValueKind.String ? logoValue.GetString() ?? "" : "";
+                if (!incoming.TryAdd(id, (name, cat, epg, logo))) throw new InvalidDataException("Duplicate stream ID.");
             }
             var existing = await db.LiveStreams.Where(s => s.ProviderId == providerId).ToListAsync(ct);
             var activeCount = existing.Count(s => s.Active);
             if (incoming.Count == 0 || incoming.Count < activeCount * 0.8)
                 throw new InvalidDataException("Empty or suspiciously reduced catalog; previous data retained.");
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
             var existingCategories = await db.LiveCategories.Where(c => c.ProviderId == providerId).ToListAsync(ct);
             foreach (var row in existingCategories)
             {
@@ -129,11 +132,13 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
             foreach (var row in existing)
             {
                 row.Active = incoming.Remove(row.SourceId, out var value);
-                if (row.Active) { row.Name = value.Name; row.CategoryId = value.Category; }
+                if (row.Active) { row.Name = value.Name; row.CategoryId = value.Category; row.EpgId = value.EpgId; row.Logo = value.Logo; }
             }
             foreach (var (id, value) in incoming)
-                db.LiveStreams.Add(new LiveStream { ProviderId = providerId, SourceId = id, Name = value.Name, CategoryId = value.Category });
+                db.LiveStreams.Add(new LiveStream { ProviderId = providerId, SourceId = id, Name = value.Name, CategoryId = value.Category, EpgId = value.EpgId, Logo = value.Logo });
             await db.SaveChangesAsync(ct);
+            await ChannelMatching.ReconcileAsync(db, ct);
+            await transaction.CommitAsync(ct);
             return existing.Count(s => s.Active) + incoming.Count;
         }
         finally { ImportGate.Release(); }
