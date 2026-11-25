@@ -34,5 +34,5 @@ public sealed class ManagedChannels : Migration
         migrationBuilder.DropColumn("EpgId", "LiveStreams");
         migrationBuilder.DropColumn("Logo", "LiveStreams");
     }
-    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder, true, false, false, false, false, false, false, false);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder, true, false, false, false, false, false, false, false, false);
 }

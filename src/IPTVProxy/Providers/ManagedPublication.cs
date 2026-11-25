@@ -10,7 +10,7 @@ public static class ManagedPublication
     public const int PublicOffset = 1_000_000_000;
     private static readonly SemaphoreSlim IdentityGate = new(1, 1);
     public sealed record Candidate(int ChannelId, int StreamId, int ProviderId, int Priority, int Limit, int Quality,
-        string Country, string Category, string Name, string Logo, string EpgId, string ChannelType = "Unknown", string Package = "", int CategoryOrder = int.MaxValue, int SourceOrder = int.MaxValue);
+        string Country, string Category, string Name, string Logo, string EpgId, string ChannelType = "Unknown", string Package = "", int CategoryOrder = int.MaxValue, int SourceOrder = int.MaxValue, int CategoryId = 0);
     public sealed record Published(int Id, int GroupId, int ChannelId, string Name, Candidate Source);
     public static Task<bool> IsEnabled(CatalogDb db, CancellationToken ct) =>
         db.PublicationSettings.AsNoTracking().AnyAsync(x => x.Id == 1 && x.Managed, ct);
@@ -20,34 +20,43 @@ public static class ManagedPublication
         join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id
         join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
         where (channelId == null || link.LogicalChannelId == channelId) && s.Active && p.Enabled && c.Active && !link.Separator && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
-        select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId, link.ChannelType, link.Package, c.SourceOrder, s.SourceOrder);
+        select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId, link.ChannelType, link.Package, c.SourceOrder, s.SourceOrder, c.Id);
 
     public static Candidate[] Rank(ChannelGroup group, IEnumerable<Candidate> candidates, int preferredStreamId = 0)
     {
+        var packagePriority=group.PackagePriority.Split('\n',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries);
+        int PackageRank(Candidate c){var i=Array.FindIndex(packagePriority,p=>p.Equals(c.Package,StringComparison.OrdinalIgnoreCase));return i<0?int.MaxValue:i;}
         var eligible = candidates.Where(c => (group.ProviderId == 0 || c.ProviderId == group.ProviderId) && (group.ChannelType == "" || c.ChannelType == group.ChannelType)).ToArray();
         var known = eligible.Where(c => c.Quality > 0 && c.Quality >= group.MinimumQuality).ToArray();
         var unknown = eligible.Where(c => c.Quality == 0).ToArray();
         var lower = eligible.Where(c => c.Quality > 0 && c.Quality < group.MinimumQuality).ToArray();
         IEnumerable<Candidate> Sort(IEnumerable<Candidate> values) => group.QualityFirst
-            ? values.OrderByDescending(c => c.StreamId == preferredStreamId).ThenByDescending(c => c.Quality).ThenBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenBy(c => c.StreamId)
-            : values.OrderByDescending(c => c.StreamId == preferredStreamId).ThenBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenByDescending(c => c.Quality).ThenBy(c => c.StreamId);
+            ? values.OrderByDescending(c => c.StreamId == preferredStreamId).ThenByDescending(c => c.Quality).ThenBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenBy(PackageRank).ThenBy(c => c.StreamId)
+            : values.OrderByDescending(c => c.StreamId == preferredStreamId).ThenBy(c => c.Priority).ThenBy(c => c.ProviderId).ThenBy(PackageRank).ThenByDescending(c => c.Quality).ThenBy(c => c.StreamId);
         // Unknown is only a fallback; not equivalent to satisfying a quality constraint.
         return Sort(known).Concat(group.MinimumQuality == 0 || group.UnknownFallback ? Sort(unknown) : [])
             .Concat(group.LowerFallback ? Sort(lower) : []).ToArray();
     }
     private static bool Contains(string value, string filter) => string.IsNullOrWhiteSpace(filter) || value.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
+    public static int[] ReferenceIds(ChannelGroup g)=>g.ReferenceCategories.Split(',',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries).Select(x=>int.TryParse(x,out var id)?id:0).Where(x=>x>0).Distinct().ToArray();
     public static Candidate[] Eligible(ChannelGroup group, LogicalChannel channel, IEnumerable<Candidate> candidates, bool? manual)
     {
         if (manual == false || (manual is null && !group.Automatic)) return [];
         if (manual is null && !Contains(channel.Name, group.NameContains)) return [];
-        var sources = candidates.Where(c => manual == true ||
+        var all=candidates.ToArray();
+        var refs=ReferenceIds(group);
+        // Reference categories determine membership, not playback source eligibility.
+        if(manual is null && refs.Length>0 && !all.Any(c=>refs.Contains(c.CategoryId) && (string.IsNullOrWhiteSpace(group.Country)||group.Country.Split(',',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries).Contains(c.Country,StringComparer.OrdinalIgnoreCase))))return [];
+        var sources = all.Where(c => manual == true ||
             ((string.IsNullOrWhiteSpace(group.Country) || group.Country.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Contains(c.Country, StringComparer.OrdinalIgnoreCase))
-             && Contains(c.Category, group.CategoryContains)));
+             && (refs.Length>0 || Contains(c.Category, group.CategoryContains))));
         return Rank(group, sources, channel.PreferredStreamId);
     }
     public static (int Provider,int Category,int Stream) SortKey(ChannelGroup group,IEnumerable<Candidate> sources)
     {
         if(!group.ProviderOrder)return (int.MaxValue,int.MaxValue,int.MaxValue);
+        var refs=ReferenceIds(group);
+        if(refs.Length>0)return sources.Where(s=>refs.Contains(s.CategoryId)).Select(s=>(0,Array.IndexOf(refs,s.CategoryId),s.SourceOrder)).Order().DefaultIfEmpty((int.MaxValue,int.MaxValue,int.MaxValue)).First();
         return sources.Where(s=>group.SortProviderId==0||s.ProviderId==group.SortProviderId)
             .Where(s=>s.SourceOrder!=int.MaxValue)
             .Select(s=>(s.Priority,s.CategoryOrder,s.SourceOrder)).Order().DefaultIfEmpty((int.MaxValue,int.MaxValue,int.MaxValue)).First();

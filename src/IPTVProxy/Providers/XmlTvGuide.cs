@@ -221,6 +221,20 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
             publicationGate.Release();
         }
     }
+    public async Task<(int Covered,int Total)> CoverageAsync(int groupId,CancellationToken ct)
+    {
+        await using var db=await factory.CreateDbContextAsync(ct);
+        var published=await ManagedPublication.ListAsync(db,groupId,ct,false);
+        var sources=(await ManagedPublication.Candidates(db).ToListAsync(ct)).ToLookup(x=>x.ChannelId);
+        await db.Database.OpenConnectionAsync(ct);
+        var connection=(SqliteConnection)db.Database.GetDbConnection();
+        await using var cmd=connection.CreateCommand();
+        cmd.CommandText="SELECT DISTINCT ProviderId,EpgId FROM EpgPrograms WHERE Stop>$now";
+        cmd.Parameters.AddWithValue("$now",DateTimeOffset.UtcNow.ToString("O"));
+        var available=new HashSet<(int,string)>();
+        await using(var reader=await cmd.ExecuteReaderAsync(ct))while(await reader.ReadAsync(ct))available.Add((reader.GetInt32(0),reader.GetString(1)));
+        return (published.Count(x=>sources[x.ChannelId].Any(s=>available.Contains((s.ProviderId,s.EpgId)))),published.Count);
+    }
     private static async Task<List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)>> BuildMapAsync(CatalogDb db,bool managed,CancellationToken ct)
     {
         var sources=await ManagedPublication.Candidates(db).ToListAsync(ct);

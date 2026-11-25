@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true, bool classification = true, bool ordering = true, bool sourceOrdering = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true, bool classification = true, bool ordering = true, bool sourceOrdering = true, bool composition = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -137,6 +137,7 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
                 e.Property(x => x.UnknownFallback); e.Property(x => x.LowerFallback);
                 if(sourceOrdering){e.Property(x=>x.SortProviderId);e.Property(x=>x.ProviderOrder);}else{e.Ignore(x=>x.SortProviderId);e.Ignore(x=>x.ProviderOrder);}
                 e.Property(x => x.QualityFirst); e.Property(x => x.SortOrder);
+                if(composition){e.Property(x=>x.ReferenceCategories).IsRequired();e.Property(x=>x.PackagePriority).IsRequired();}else{e.Ignore(x=>x.ReferenceCategories);e.Ignore(x=>x.PackagePriority);}
             });
             model.Entity<GroupOverride>(e => {
                 e.ToTable("GroupOverrides"); e.HasKey(x => new { x.GroupId, x.ChannelId });

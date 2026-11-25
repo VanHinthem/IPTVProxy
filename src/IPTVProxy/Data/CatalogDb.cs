@@ -111,6 +111,8 @@ public sealed class ChannelGroup
     public bool LowerFallback { get; set; }
     public bool QualityFirst { get; set; }
     public int SortProviderId { get; set; }
+    public string ReferenceCategories { get; set; } = "";
+    public string PackagePriority { get; set; } = "";
     public bool ProviderOrder { get; set; } = true;
     public int SortOrder { get; set; }
 }

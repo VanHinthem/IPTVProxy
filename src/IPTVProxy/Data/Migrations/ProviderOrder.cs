@@ -21,5 +21,5 @@ public sealed class ProviderOrder : Migration
         m.DropColumn("SortProviderId","ChannelGroups");m.DropColumn("ProviderOrder","ChannelGroups");
         m.Sql("DROP TABLE EpgPrograms; DROP TABLE EpgRefreshState;");
     }
-    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder, true, true, true, true, true, true, true, true, false);
 }

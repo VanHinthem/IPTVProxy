@@ -19,5 +19,5 @@ public sealed class SourceClassification : Migration
         foreach(var name in new[]{"ChannelType","QualityOrigin","FrameRate","CatchupHint"})m.DropColumn(name,"ChannelSources");
         m.DropColumn("ChannelType","ChannelGroups");
     }
-    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder, true, true, true, true, true, true, false, false);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder)=>CatalogModelSnapshot.Build(modelBuilder, true, true, true, true, true, true, false, false, false);
 }
