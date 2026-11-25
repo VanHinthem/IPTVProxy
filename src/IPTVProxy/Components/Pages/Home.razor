@@ -1,0 +1,80 @@
+@page "/"
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.EntityFrameworkCore
+@using IPTVProxy.Data
+@using IPTVProxy.Providers
+@inject IDbContextFactory<CatalogDb> Factory
+@inject LiveCatalog Catalog
+@inject IConfiguration Config
+<PageTitle>IPTVProxy</PageTitle>
+<h1>IPTVProxy</h1>
+<p>Live-tv — eerste ontwikkelversie</p>
+<h2>Providers</h2>
+<table style="width:100%;text-align:left">
+<thead><tr><th>Naam</th><th>Kanalen</th><th>Limiet</th><th>Actie</th></tr></thead>
+<tbody>
+@foreach (var p in providers)
+{
+    <tr><td>@p.Name</td><td>@p.Count</td><td>@p.Limit</td>
+    <td><button disabled="@busy" @onclick="() => Import(p.Id)">Importeren</button></td></tr>
+}
+</tbody>
+</table>
+<h2>Provider toevoegen</h2>
+<div style="display:grid;gap:.5rem;max-width:28rem">
+<label>Naam <input @bind="name" maxlength="100" /></label>
+<label>Server (HTTP/HTTPS) <input @bind="origin" placeholder="http://provider.example:80" /></label>
+<p style="font-size:.9rem">Gebruik HTTPS indien beschikbaar. Bij HTTP worden providercredentials en streams onversleuteld verstuurd.</p>
+<label>Gebruikersnaam <input @bind="username" autocomplete="off" /></label>
+<label>Wachtwoord <input type="password" @bind="password" autocomplete="new-password" /></label>
+<label>Verbindingslimiet <input type="number" min="1" max="100" @bind="limit" /></label>
+<button disabled="@busy" @onclick="Add">Toevoegen</button>
+</div>
+<p role="status">@status</p>
+<h2>IPTV-speler</h2>
+<p>Server: @(Config["PublicBaseUrl"] ?? "http://localhost:8080")</p>
+<p>Gebruiker: @(Config["Accounts:IptvName"] ?? "viewer")</p>
+<p>Gebruik het afzonderlijke IPTV-wachtwoord uit je lokale configuratie.</p>
+@code {
+    private record ProviderRow(int Id, string Name, int Count, int Limit);
+    private List<ProviderRow> providers = new();
+    private string name = "", origin = "", username = "", password = "", status = "";
+    private int limit = 1;
+    private bool busy;
+    protected override async Task OnInitializedAsync() => await Refresh();
+    private async Task Refresh()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        providers = await db.Providers.AsNoTracking().OrderBy(p => p.Id)
+            .Select(p => new ProviderRow(p.Id, p.Name, db.LiveStreams.Count(s => s.ProviderId == p.Id && s.Active), p.ConnectionLimit)).ToListAsync();
+    }
+    private async Task Add()
+    {
+        if (busy) return;
+        busy = true;
+        try
+        {
+            await Catalog.AddAsync(name, origin, username, password, limit, CancellationToken.None);
+            name = origin = username = "";
+            status = "Provider toegevoegd. Start nu de import.";
+            await Refresh();
+        }
+        catch (ArgumentException ex) { status = ex.Message; }
+        catch { status = "Provider opslaan mislukt. Controleer de databaseconfiguratie."; }
+        finally { password = ""; busy = false; }
+    }
+    private async Task Import(int id)
+    {
+        if (busy) return;
+        busy = true;
+        status = "Import bezig...";
+        try
+        {
+            var count = await Catalog.ImportAsync(id, CancellationToken.None);
+            status = $"Import geslaagd: {count} kanalen.";
+            await Refresh();
+        }
+        catch { status = "Import mislukt of catalogus afgewezen. Bestaande gegevens behouden."; }
+        finally { busy = false; }
+    }
+}
