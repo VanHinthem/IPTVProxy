@@ -1,6 +1,6 @@
 # Projectstatus — 2026-11-25
 
-Werkblok #1 afgerond op 25 november 2026; PR #5 gemerged naar main (7c0b78c). Volgend werkblok: #2. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
+Werkblok #1 afgerond op 25 november 2026; PR #5 gemerged naar main (7c0b78c). Werkblok #2 functioneel geaccepteerd, PR #6 in review; na merge volgt #3. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
 
 NAS en Nginx HTTPS werken. IPTV-subdomein DNS-only om vertraging via Cloudflare-proxy te vermijden. VLC speelt direct af; Nuvio playback en single-viewer zenderwisseling bevestigd. Twee geautoriseerde providers geïmporteerd (86.514 livekanalen). HTTP/HTTPS upstream en maximaal vijf gecontroleerde redirects ondersteund.
 
@@ -8,7 +8,7 @@ Per-client queues veroorzaakten overflow bij bursty streams van tweede provider.
 
 CI en imagepublicatie 568b0f3 groen. NAS-update, behoud catalogus, playback beide providers en externe 5G-playback door gebruiker bevestigd. Open vóór bredere externe gebruikersdistributie: publieke toegangsrestricties, individuele gebruikerssessies en client-IP-rate-limiting; apart opvolgen in #4. Arvio nog niet afzonderlijk gevalideerd. HLS/failover later. Single-viewer switching kan andere kijkers verdringen. Geen credentials in Git.
 
-## Werkblok 2 — in ontwikkeling
+## Werkblok 2 — ontwikkelhistorie
 Besluiten: onbekende kwaliteit als fallback, automatische publicatie van passende kanalen, standaard providerprioriteit eerst. Eerste increment: additieve catalogusmigratie, afgeleide naammetadata, conservatieve matching en import/backfill. Ruwe Xtream-publicatie en playback blijven voorlopig intact. Groepen, beheer, EPG-publicatie, periodieke synchronisatie en bronselectie volgen binnen dezelfde PR. Nog niet op NAS geaccepteerd.
 
 Tweede increment: dynamische/handmatige groepen, persistente uitzonderingen, kanaaloverzicht met paginering, bronrangschikking en opt-in samengestelde Xtream-publicatie. Publicatie-ID en capaciteitshandling nog te verharden vóór NAS-deployment; EPG en automatische sync volgen.
@@ -36,3 +36,6 @@ NAS 088e0f4: SuperTV HTTP 301 resolved, both XMLTV imports accepted (165,129 + 2
 NAS a123b8b: user confirms EPG visible in IPTV client. Group composition increment adds ordered multi-category references (membership independent of playback provider), group-local package priorities within existing quality/provider tier, desktop drag/drop group and channel reordering, compact source table with ranking/eligibility explanation, explicit global preference radio, and on-demand EPG coverage. Existing groups default to previous behavior. No playback or public-ID allocation changes. UI and CI pending; cross-group bulk move and touch drag/drop not implemented.
 
 NAS cd51e25: user accepted group-management increment. Artwork adds signed local logical/raw channel logo URLs (manual override, preferred source, provider/quality fallback, neutral placeholder), on-demand raster cache with 4 MiB image limit, 256 MiB default total limit, bounded concurrency and safe public-address-only redirect handling. XMLTV imports programme icon/image URLs and publishes protected local artwork links; import logs count programmes with artwork. Provider artwork availability and client programme rendering unverified. External metadata enrichment deferred. No playback change. Image URLs are bearer capabilities, not provider URLs or account passwords. Cache deduplicates identical URLs (not identical bytes at distinct URLs); stale cleanup on cache writes. Xtream EPG JSON artwork not added because no uniform client contract; XMLTV carries programme images.
+
+## Afsluiting werkblok 2 — 25 november 2026
+NAS 01546f8: zenderlogo's zichtbaar en geaccepteerd. EPG eerder bevestigd; groepsbeheer algemeen geaccepteerd. SQLite: SuperTV 157637 en Strong8K 238844 programma's, beide 0 artwork; refresh na upgrade en originele XMLTV-artwork niet bevestigd. Programma-afbeeldingen niet afzonderlijk getest. CI 45637782018 en Development image 45637768770 groen. PR #6 gereed voor review na afsluitende documentatie en aanvullende regressiechecks. #2 sluit bij merge; #3 films/series volgt. Niet-blokkerende verbeteringen: https://github.com/VanHinthem/IPTVProxy/issues/7. Externe toegang voor meerdere gebruikers, capaciteit, actieve failover en monitoring blijven #4. Geen migratie van raw favorieten. Geen nieuwe NAS-deployment nodig voor alleen documentatie/tests.
