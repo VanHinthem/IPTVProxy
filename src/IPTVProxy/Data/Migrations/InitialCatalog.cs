@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true, bool classification = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -108,6 +108,8 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             e.Property(x => x.Country).IsRequired();
             e.Property(x => x.Quality);
             e.Property(x => x.Codec).IsRequired();
+            if(classification) { e.Property(x=>x.ChannelType).IsRequired(); e.Property(x=>x.QualityOrigin).IsRequired(); e.Property(x=>x.FrameRate); e.Property(x=>x.CatchupHint); }
+            else {e.Ignore(x=>x.ChannelType);e.Ignore(x=>x.QualityOrigin);e.Ignore(x=>x.FrameRate);e.Ignore(x=>x.CatchupHint);}
             if (metadata) { e.Property(x => x.Package).IsRequired(); e.Property(x => x.Tags).IsRequired(); e.Property(x => x.Separator); }
             else { e.Ignore(x => x.Package); e.Ignore(x => x.Tags); e.Ignore(x => x.Separator); }
             e.Property(x => x.Manual);
@@ -127,6 +129,7 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
                 e.Property(x => x.Country).IsRequired();
                 e.Property(x => x.NameContains).IsRequired();
                 e.Property(x => x.CategoryContains).IsRequired();
+                if(classification)e.Property(x=>x.ChannelType).IsRequired();else e.Ignore(x=>x.ChannelType);
                 e.Property(x => x.Enabled); e.Property(x => x.Automatic);
                 e.Property(x => x.ProviderId); e.Property(x => x.MinimumQuality);
                 e.Property(x => x.UnknownFallback); e.Property(x => x.LowerFallback);

@@ -45,7 +45,7 @@ await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CatalogDb>();
     var pending = await db.Database.GetPendingMigrationsAsync();
-    var rematch = pending.Contains("202611250005_SourceMetadata");
+    var rematch = pending.Contains("202611250005_SourceMetadata") || pending.Contains("202611250006_SourceClassification");
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
     if (rematch && !await ManagedPublication.IsEnabled(db, CancellationToken.None))

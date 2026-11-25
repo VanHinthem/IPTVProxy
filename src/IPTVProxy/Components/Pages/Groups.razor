@@ -30,6 +30,7 @@
 <label>Kanaalnaam bevat <input @bind="edit.NameContains" /></label>
 <label>Providercategorie bevat <input @bind="edit.CategoryContains" /></label>
 <label>Provider <select @bind="edit.ProviderId"><option value="0">Alle</option>@foreach(var p in providers){<option value="@p.Id">@p.Name</option>}</select></label>
+<label>Kanaaltype <select @bind="edit.ChannelType"><option value="">Alle</option><option value="Television">Televisie (vermoedelijk)</option><option value="Radio">Radio</option><option value="Event">Evenement</option><option value="Loop">24/7</option><option value="Unknown">Onbekend</option></select></label>
 <label>Minimumkwaliteit <select @bind="edit.MinimumQuality"><option value="0">Alle</option><option value="480">SD</option><option value="720">HD</option><option value="1080">FHD</option><option value="2160">4K</option></select></label>
 <label><input type="checkbox" @bind="edit.UnknownFallback" /> Onbekende kwaliteit als fallback</label>
 <label><input type="checkbox" @bind="edit.LowerFallback" /> Lagere bekende kwaliteit toestaan</label>
@@ -61,7 +62,7 @@
         managed = await ManagedPublication.IsEnabled(db, CancellationToken.None);
     }
     private void New() => edit = new();
-    private void Edit(ChannelGroup g) => edit = new ChannelGroup { Id=g.Id, Name=g.Name, Enabled=g.Enabled, Automatic=g.Automatic, Country=g.Country, NameContains=g.NameContains, CategoryContains=g.CategoryContains, ProviderId=g.ProviderId, MinimumQuality=g.MinimumQuality, UnknownFallback=g.UnknownFallback, LowerFallback=g.LowerFallback, QualityFirst=g.QualityFirst, SortOrder=g.SortOrder };
+    private void Edit(ChannelGroup g) => edit = new ChannelGroup { Id=g.Id, Name=g.Name, Enabled=g.Enabled, Automatic=g.Automatic, Country=g.Country, NameContains=g.NameContains, CategoryContains=g.CategoryContains, ChannelType=g.ChannelType, ProviderId=g.ProviderId, MinimumQuality=g.MinimumQuality, UnknownFallback=g.UnknownFallback, LowerFallback=g.LowerFallback, QualityFirst=g.QualityFirst, SortOrder=g.SortOrder };
     private async Task Save()
     {
         if (string.IsNullOrWhiteSpace(edit.Name)) { message="Vul een groepsnaam in."; return; }

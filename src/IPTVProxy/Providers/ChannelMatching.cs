@@ -27,6 +27,7 @@ public static class ChannelMatching
             if(!links.TryGetValue(stream.Id,out var link))continue;
             var meta=ChannelName.Parse(stream.Name,categories.GetValueOrDefault((stream.ProviderId,stream.CategoryId),""));
             link.Package=meta.Package;link.Tags=meta.Tags;link.Separator=meta.Separator;
+            link.ChannelType=meta.ChannelType;link.QualityOrigin=meta.QualityOrigin;link.FrameRate=meta.FrameRate;link.CatchupHint=meta.CatchupHint;
             if(protectedIds.Contains(link.LogicalChannelId))continue;
             link.NormalizedName=meta.Name;link.Country=meta.Country;link.Quality=meta.Quality;link.Codec=meta.Codec;
             var key=blocked.Contains(meta.MatchKey)?"":meta.MatchKey;
@@ -91,6 +92,7 @@ public static class ChannelMatching
             link.Quality = metadata.Quality;
             link.Codec = metadata.Codec;
             link.Package = metadata.Package; link.Tags = metadata.Tags; link.Separator = metadata.Separator;
+            link.ChannelType=metadata.ChannelType;link.QualityOrigin=metadata.QualityOrigin;link.FrameRate=metadata.FrameRate;link.CatchupHint=metadata.CatchupHint;
         }
         await db.SaveChangesAsync(ct);
     }

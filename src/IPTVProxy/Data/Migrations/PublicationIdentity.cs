@@ -16,5 +16,5 @@ public sealed class PublicationIdentity : Migration
         CREATE INDEX IX_PublishedIdentities_ChannelId ON PublishedIdentities(ChannelId);
         """);
     protected override void Down(MigrationBuilder migrationBuilder) => migrationBuilder.DropTable("PublishedIdentities");
-    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder, true, true, true, false, false);
+    protected override void BuildTargetModel(ModelBuilder modelBuilder) => CatalogModelSnapshot.Build(modelBuilder, true, true, true, false, false, false);
 }

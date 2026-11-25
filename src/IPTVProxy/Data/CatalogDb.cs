@@ -85,6 +85,10 @@ public sealed class ChannelSource
     public string Package { get; set; } = "";
     public string Tags { get; set; } = "";
     public bool Separator { get; set; }
+    public string ChannelType { get; set; } = "Unknown";
+    public string QualityOrigin { get; set; } = "";
+    public int FrameRate { get; set; }
+    public bool CatchupHint { get; set; }
     public bool Manual { get; set; }
     public bool ReviewRequired { get; set; }
 }
@@ -98,6 +102,7 @@ public sealed class ChannelGroup
     public string Country { get; set; } = "";
     public string NameContains { get; set; } = "";
     public string CategoryContains { get; set; } = "";
+    public string ChannelType { get; set; } = "";
     public int ProviderId { get; set; }
     public int MinimumQuality { get; set; }
     public bool UnknownFallback { get; set; } = true;

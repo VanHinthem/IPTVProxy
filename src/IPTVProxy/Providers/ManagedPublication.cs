@@ -10,7 +10,7 @@ public static class ManagedPublication
     public const int PublicOffset = 1_000_000_000;
     private static readonly SemaphoreSlim IdentityGate = new(1, 1);
     public sealed record Candidate(int ChannelId, int StreamId, int ProviderId, int Priority, int Limit, int Quality,
-        string Country, string Category, string Name, string Logo, string EpgId);
+        string Country, string Category, string Name, string Logo, string EpgId, string ChannelType = "Unknown");
     public sealed record Published(int Id, int GroupId, int ChannelId, string Name, Candidate Source);
     public static Task<bool> IsEnabled(CatalogDb db, CancellationToken ct) =>
         db.PublicationSettings.AsNoTracking().AnyAsync(x => x.Id == 1 && x.Managed, ct);
@@ -20,11 +20,11 @@ public static class ManagedPublication
         join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id
         join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
         where (channelId == null || link.LogicalChannelId == channelId) && s.Active && p.Enabled && c.Active && !link.Separator && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
-        select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId);
+        select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId, link.ChannelType);
 
     public static Candidate[] Rank(ChannelGroup group, IEnumerable<Candidate> candidates, int preferredStreamId = 0)
     {
-        var eligible = candidates.Where(c => group.ProviderId == 0 || c.ProviderId == group.ProviderId).ToArray();
+        var eligible = candidates.Where(c => (group.ProviderId == 0 || c.ProviderId == group.ProviderId) && (group.ChannelType == "" || c.ChannelType == group.ChannelType)).ToArray();
         var known = eligible.Where(c => c.Quality > 0 && c.Quality >= group.MinimumQuality).ToArray();
         var unknown = eligible.Where(c => c.Quality == 0).ToArray();
         var lower = eligible.Where(c => c.Quality > 0 && c.Quality < group.MinimumQuality).ToArray();
