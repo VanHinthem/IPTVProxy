@@ -50,7 +50,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         if (stream is null) { ctx.Response.StatusCode = 404; return; }
         var provider = await db.Providers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stream.ProviderId && x.Enabled, ctx.RequestAborted);
         if (provider is null) { ctx.Response.StatusCode = 404; return; }
-        var subscriber = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(32) {
+        var subscriber = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(512) {
             SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.Wait
         });
         Session session;
@@ -129,7 +129,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         catch (Exception ex)
         {
             if (!ctx.RequestAborted.IsCancellationRequested)
-                log.LogWarning("Subscriber failed for stream {StreamId}: {ErrorType}", id, ex.GetType().Name);
+                log.LogWarning("Subscriber failed for stream {StreamId}: {ErrorType}, queue overflow {Overflow}", id, ex.GetType().Name, ex is IOException && ex.Message == "Subscriber too slow.");
             if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 502;
             else ctx.Abort();
         }
@@ -138,6 +138,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             lock (gate)
             {
                 session.Subscribers.Remove(subscriber);
+                log.LogInformation("Subscriber left stream {StreamId}; remaining {Subscribers}, request aborted {Aborted}", id, session.Subscribers.Count, ctx.RequestAborted.IsCancellationRequested);
                 subscriber.Writer.TryComplete();
                 if (session.Subscribers.Count == 0 && !session.Closing)
                 {
@@ -175,7 +176,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeout.CancelAfter(TimeSpan.FromSeconds(20));
                 var count = await input.ReadAsync(buffer.AsMemory(pending), timeout.Token);
-                if (count == 0) break;
+                if (count == 0) { log.LogInformation("Upstream EOF for stream {StreamId}", session.Id); break; }
                 var total = pending + count;
                 var length = total / 188 * 188;
                 if (length == 0) { pending = total; continue; }
@@ -188,6 +189,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                     foreach (var sub in session.Subscribers.ToArray())
                     {
                         if (sub.Writer.TryWrite(chunk)) continue;
+                        log.LogWarning("Subscriber queue full for stream {StreamId}; disconnecting slow subscriber", session.Id);
                         sub.Writer.TryComplete(new IOException("Subscriber too slow."));
                         session.Subscribers.Remove(sub);
                     }
