@@ -19,7 +19,7 @@ public static class ManagedPublication
         join s in db.LiveStreams.AsNoTracking() on link.LiveStreamId equals s.Id
         join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id
         join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
-        where (channelId == null || link.LogicalChannelId == channelId) && s.Active && p.Enabled && c.Active && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
+        where (channelId == null || link.LogicalChannelId == channelId) && s.Active && p.Enabled && c.Active && !link.Separator && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
         select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId);
 
     public static Candidate[] Rank(ChannelGroup group, IEnumerable<Candidate> candidates, int preferredStreamId = 0)

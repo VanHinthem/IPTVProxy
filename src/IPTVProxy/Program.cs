@@ -44,8 +44,16 @@ if (origin.Scheme is not ("http" or "https") || origin.UserInfo.Length != 0 || o
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CatalogDb>();
+    var pending = await db.Database.GetPendingMigrationsAsync();
+    var rematch = pending.Contains("202611250005_SourceMetadata");
     await db.Database.MigrateAsync();
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
+    if (rematch && !await ManagedPublication.IsEnabled(db, CancellationToken.None))
+    {
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await ChannelMatching.RematchAsync(db, CancellationToken.None);
+        await tx.CommitAsync();
+    }
     if (await db.LiveStreams.AnyAsync(x => x.Active && !db.ChannelSources.Any(l => l.LiveStreamId == x.Id)))
     {
         await using var transaction = await db.Database.BeginTransactionAsync();

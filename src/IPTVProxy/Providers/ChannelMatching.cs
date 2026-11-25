@@ -5,6 +5,47 @@ namespace IPTVProxy.Providers;
 
 public static class ChannelMatching
 {
+    // Explicit rematch before managed publication: protect all configured/public identities
+    // and any channel with manual sources. Retain unreferenced old rows for audit.
+    public static async Task RematchAsync(CatalogDb db, CancellationToken ct)
+    {
+        if (await db.PublicationSettings.AnyAsync(x => x.Managed, ct))
+            throw new InvalidOperationException("Disable managed publication before rematching.");
+        var protectedIds = (await db.LogicalChannels.Where(c => c.Manual || c.PreferredStreamId != 0).Select(c => c.Id).ToListAsync(ct)).ToHashSet();
+        protectedIds.UnionWith(await db.ChannelSources.Where(l => l.Manual).Select(l => l.LogicalChannelId).Distinct().ToListAsync(ct));
+        protectedIds.UnionWith(await db.GroupOverrides.Select(x => x.ChannelId).Distinct().ToListAsync(ct));
+        protectedIds.UnionWith(await db.PublishedIdentities.Select(x => x.ChannelId).Distinct().ToListAsync(ct));
+        var categories=(await db.LiveCategories.AsNoTracking().ToListAsync(ct)).ToDictionary(x=>(x.ProviderId,x.SourceId),x=>x.Name);
+        var streams=await db.LiveStreams.AsNoTracking().Where(x=>x.Active).OrderBy(x=>x.Id).ToListAsync(ct);
+        var channels=(await db.LogicalChannels.ToListAsync(ct)).ToDictionary(x=>x.Id);
+        var links=(await db.ChannelSources.ToListAsync(ct)).ToDictionary(x=>x.LiveStreamId);
+        var claimed=new HashSet<int>(protectedIds);
+        var targets=new Dictionary<string,LogicalChannel>(StringComparer.Ordinal);
+        var blocked=channels.Values.Where(c=>protectedIds.Contains(c.Id)&&c.MatchKey!="").Select(c=>c.MatchKey).ToHashSet(StringComparer.Ordinal);
+        foreach(var stream in streams)
+        {
+            if(!links.TryGetValue(stream.Id,out var link))continue;
+            var meta=ChannelName.Parse(stream.Name,categories.GetValueOrDefault((stream.ProviderId,stream.CategoryId),""));
+            link.Package=meta.Package;link.Tags=meta.Tags;link.Separator=meta.Separator;
+            if(protectedIds.Contains(link.LogicalChannelId))continue;
+            link.NormalizedName=meta.Name;link.Country=meta.Country;link.Quality=meta.Quality;link.Codec=meta.Codec;
+            var key=blocked.Contains(meta.MatchKey)?"":meta.MatchKey;
+            if(key=="" || !targets.TryGetValue(key,out var target))
+            {
+                if(claimed.Add(link.LogicalChannelId))target=channels[link.LogicalChannelId];
+                else {target=new LogicalChannel();db.LogicalChannels.Add(target);}
+                target.Name=meta.Name;target.Country=meta.Country;target.MatchKey=key;
+                if(key!="")targets.Add(key,target);
+            }
+            link.LogicalChannel=target;
+            link.ReviewRequired=key=="";
+        }
+        await db.SaveChangesAsync(ct);
+        // Empty automatic identities must not participate in future matching.
+        var empty=await db.LogicalChannels.Where(c=>!c.Manual && !db.ChannelSources.Any(l=>l.LogicalChannelId==c.Id)).ToListAsync(ct);
+        foreach(var channel in empty)if(!protectedIds.Contains(channel.Id))channel.MatchKey="";
+        await db.SaveChangesAsync(ct);
+    }
     // Called under the catalog import gate and within its database transaction.
     public static async Task ReconcileAsync(CatalogDb db, CancellationToken ct)
     {
@@ -49,6 +90,7 @@ public static class ChannelMatching
             link.Country = metadata.Country;
             link.Quality = metadata.Quality;
             link.Codec = metadata.Codec;
+            link.Package = metadata.Package; link.Tags = metadata.Tags; link.Separator = metadata.Separator;
         }
         await db.SaveChangesAsync(ct);
     }

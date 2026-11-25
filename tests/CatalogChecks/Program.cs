@@ -5,6 +5,12 @@ using Microsoft.Data.Sqlite;
 using System.Text.Json;
 
 static void Check(bool value,string message){if(!value)throw new Exception(message);}
+var tele=ChannelName.Parse("T2: 24KITCHEN ᴿᴬᵂ","NL| TELE2 VERMAAK ᴿᴬᵂ");
+var delta=ChannelName.Parse("[Delta] 24Kitchen","NL | DELTA");
+var hd=ChannelName.Parse("NL | 24 KITCHENʳᵉᶜ","NL | HD NEDERLAND");
+Check(tele.MatchKey==delta.MatchKey && delta.MatchKey==hd.MatchKey && tele.Quality==0 && hd.Quality==720,"observed package variants");
+Check(ChannelName.Parse("### TELE2 ###","NL").Separator,"separator");
+Check(ChannelName.Parse("NL | MAX 1","NL | MAX PPV").MatchKey=="","event isolation");
 var a=ChannelName.Parse("NL: NPO1 FHD","NL");
 var b=ChannelName.Parse("NL: NPO 1 HD","NL");
 Check(a.MatchKey==b.MatchKey && a.Quality==1080 && b.Quality==720,"matching quality variants");

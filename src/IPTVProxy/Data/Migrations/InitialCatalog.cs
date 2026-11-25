@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -108,6 +108,8 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             e.Property(x => x.Country).IsRequired();
             e.Property(x => x.Quality);
             e.Property(x => x.Codec).IsRequired();
+            if (metadata) { e.Property(x => x.Package).IsRequired(); e.Property(x => x.Tags).IsRequired(); e.Property(x => x.Separator); }
+            else { e.Ignore(x => x.Package); e.Ignore(x => x.Tags); e.Ignore(x => x.Separator); }
             e.Property(x => x.Manual);
             e.Property(x => x.ReviewRequired);
             e.HasIndex(x => x.LogicalChannelId);

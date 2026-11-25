@@ -82,6 +82,9 @@ public sealed class ChannelSource
     public string Country { get; set; } = "";
     public int Quality { get; set; }
     public string Codec { get; set; } = "";
+    public string Package { get; set; } = "";
+    public string Tags { get; set; } = "";
+    public bool Separator { get; set; }
     public bool Manual { get; set; }
     public bool ReviewRequired { get; set; }
 }
