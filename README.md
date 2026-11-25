@@ -2,7 +2,7 @@
 
 Self-hosted IPTV-manager en streamingproxy voor geautoriseerde IPTV-bronnen. Het doel is aanzienlijk eenvoudiger configuratie en onderhoud dan Dispatcharr, met betrouwbare playback via bestaande spelers.
 
-**Status:** Werkblok 1 (Live TV) functioneel geaccepteerd op NAS; PR #5 wacht op merge. Volgende stap: automatisch kanaalbeheer (#2).
+**Status:** Werkblok 1 (Live TV) afgerond en geaccepteerd op NAS; PR #5 gemerged naar main. Volgende stap: automatisch kanaalbeheer (#2).
 
 ## Documentatie
 - [MVP en architectuur](docs/MVP.md)
