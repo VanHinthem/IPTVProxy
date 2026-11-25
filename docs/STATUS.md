@@ -1,6 +1,6 @@
 # Projectstatus — 2026-11-25
 
-Werkblok #1 functioneel geaccepteerd op 25 november 2026; draft PR #5 wacht op merge. Volgend werkblok: #2. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
+Werkblok #1 afgerond op 25 november 2026; PR #5 gemerged naar main (7c0b78c). Volgend werkblok: #2. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
 
 NAS en Nginx HTTPS werken. IPTV-subdomein DNS-only om vertraging via Cloudflare-proxy te vermijden. VLC speelt direct af; Nuvio playback en single-viewer zenderwisseling bevestigd. Twee geautoriseerde providers geïmporteerd (86.514 livekanalen). HTTP/HTTPS upstream en maximaal vijf gecontroleerde redirects ondersteund.
 
