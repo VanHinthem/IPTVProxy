@@ -10,6 +10,27 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
     private readonly object gate = new();
     private readonly Dictionary<int,int> active = new();
 
+    private async Task<HttpResponseMessage> OpenStream(HttpClient client, Uri uri, int id, CancellationToken ct)
+    {
+        const int maxRedirects = 5;
+        for (var hop = 0; ; hop++)
+        {
+            var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
+            if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)) return response;
+            using (response)
+            {
+                var location = response.Headers.Location;
+                if (hop >= maxRedirects || location is null ||
+                    !Uri.TryCreate(uri, location, out var next) ||
+                    next.Scheme is not ("http" or "https") || next.UserInfo.Length != 0 || next.IsLoopback ||
+                    (uri.Scheme == "https" && next.Scheme == "http"))
+                    throw new HttpRequestException("Upstream redirect rejected.");
+                log.LogInformation("Following upstream redirect {Hop} for stream {StreamId}: HTTP {StatusCode}", hop + 1, id, (int)response.StatusCode);
+                uri = next;
+            }
+        }
+    }
+
     public async Task Play(HttpContext ctx, string username, string password, int id)
     {
         log.LogInformation("Playback requested: stream {StreamId}", id);
@@ -34,7 +55,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             using var client = clients.CreateClient("provider");
             using var startup = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
             startup.CancelAfter(TimeSpan.FromSeconds(20));
-            using var upstream = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, startup.Token);
+            using var upstream = await OpenStream(client, uri, id, startup.Token);
             log.LogInformation("Upstream provider {ProviderId}, stream {StreamId}: HTTP {StatusCode}, media {MediaType}, redirect {Redirect}", provider.Id, id, (int)upstream.StatusCode, upstream.Content.Headers.ContentType?.MediaType switch { "video/mp2t" => "video/mp2t", "video/mpeg" => "video/mpeg", "application/octet-stream" => "application/octet-stream", "application/vnd.apple.mpegurl" => "HLS", "text/html" => "text/html", null => "missing", _ => "other" }, upstream.Headers.Location is not null);
             if (!upstream.IsSuccessStatusCode) { ctx.Response.StatusCode = 502; return; }
             var media = upstream.Content.Headers.ContentType?.MediaType;
