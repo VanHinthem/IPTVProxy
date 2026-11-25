@@ -17,6 +17,11 @@ Check(ChannelName.Parse("16K | ANIMAL PLANETᵁᴴᴰ","NL | 16ᴋ NEDERLANDᵁ�
 Check(ChannelName.Parse("NL: 100% NL","NL| RADIO LIVE").ChannelType=="Radio","radio");
 Check(ChannelName.Parse("NL: AHSOKA ᴿᴬᵂ","NL| DISNEY+ 24/7 ᴿᴬᵂ").ChannelType=="Loop","loop");
 Check(ChannelName.Parse("TEL | BABY TVᶠʰᵈ","BE | TELENETᵛᶦᵖ").Quality==1080,"superscript FHD");
+Check(ChannelName.Parse("T2: GLOWFM ᴿᴬᵂ","NL| TELE2 VERMAAK ᴿᴬᵂ").ChannelType=="Radio","mixed package radio");
+Check(ChannelName.Parse("[Delta] WeertFM TV","NL | DELTA").ChannelType=="Television","FM television");
+Check(ChannelName.Parse("NL | DISCOVERY+ LIVE 10","NL | DISCOVERY+ SPORT").ChannelType=="Event","numbered event");
+Check(ChannelName.Parse("NL: VIAPLAY TV ᴿᴬᵂ","NL| TELE2 SPORT").ChannelType=="Television","regular Viaplay");
+Check(ChannelName.Parse("NL: VIAPLAY DRAMA 1 ᴿᴬᵂ","NL| FILMS HD/4K").ChannelType=="Loop","film loop");
 var a=ChannelName.Parse("NL: NPO1 FHD","NL");
 var b=ChannelName.Parse("NL: NPO 1 HD","NL");
 Check(a.MatchKey==b.MatchKey && a.Quality==1080 && b.Quality==720,"matching quality variants");

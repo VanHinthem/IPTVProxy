@@ -39,7 +39,7 @@ public static class ChannelMatching
                 if(key!="")targets.Add(key,target);
             }
             link.LogicalChannel=target;
-            link.ReviewRequired=key=="";
+            link.ReviewRequired=key=="" && meta.ChannelType is not ("Event" or "Loop" or "Separator");
         }
         await db.SaveChangesAsync(ct);
         // Empty automatic identities must not participate in future matching.
@@ -84,7 +84,7 @@ public static class ChannelMatching
                         else candidates.Add(target);
                     }
                 }
-                link = new ChannelSource { LiveStreamId = stream.Id, LogicalChannel = target, ReviewRequired = metadata.MatchKey == "" || candidates is { Count: > 1 } };
+                link = new ChannelSource { LiveStreamId = stream.Id, LogicalChannel = target, ReviewRequired = (metadata.MatchKey == "" && metadata.ChannelType is not ("Event" or "Loop" or "Separator")) || candidates is { Count: > 1 } };
                 db.ChannelSources.Add(link);
             }
             link.NormalizedName = metadata.Name;

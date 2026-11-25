@@ -76,10 +76,17 @@ public static class ChannelName
             "BABYTV" or "BABY TV"=>"Baby TV","BBC FOUR / CBEEBIES" or "BBC FOUR - CBEEBIES"=>"BBC Four - CBeebies",
             "ESPN2" or "ESPN 2"=>"ESPN 2","ESPN3" or "ESPN 3"=>"ESPN 3","ESPN4" or "ESPN 4"=>"ESPN 4",
             "RTL4" or "RTL 4"=>"RTL 4","RTL5" or "RTL 5"=>"RTL 5","RTL7" or "RTL 7"=>"RTL 7","RTL8" or "RTL 8"=>"RTL 8",
-            "SBS6" or "SBS 6"=>"SBS 6",_=>name};
+            "SBS6" or "SBS 6"=>"SBS 6","NPO3FM" or "NPO 3FM"=>"NPO 3FM",_=>name};
         var npo=Npo.Match(name);if(npo.Success&&(country is "" or "NL")&&!conflict){country="NL";name="NPO "+npo.Groups[1].Value;}
         if(name.Length==0)name=original;
-        var type=separator?"Separator":
+        var nlbe=country is "NL" or "BE";
+        var numberedEvent=nlbe && (Regex.IsMatch(name,@"\bDISCOVERY\+\s+(LIVE\s+\d+|UFC LIVE)\b",Options)
+            || Regex.IsMatch(cat,@"\bVIAPLAY\s+(OVERIGE|VOETBAL|FORMULE 1)\b",Options)
+            || Regex.IsMatch(name,@"\b(ONLY EVENTS|LIVE DURING EVENTS)\b",Options));
+        var filmLoop=nlbe && Regex.IsMatch(name,@"^VIAPLAY\s+(AKTIE|ACTION|COMEDY|DOCU|DRAMA|HORROR|KOMEDIE|MISDAAD|ROMANTIEK|SCI-FI|THRILLER)(\s+\d+)?$",Options);
+        var radio=nlbe && !Regex.IsMatch(name,@"\b(TV|TELEVISIE|INFOBOX)\b|INFOBOX$",Options) &&
+            Regex.IsMatch(name,@"(?:\bWEBRADIO\b|RADIO$|^RADIONL$|FM$|^NPO\s*3FM$)",Options);
+        var type=separator?"Separator":numberedEvent?"Event":filmLoop?"Loop":radio?"Radio":
             Regex.IsMatch(cat,@"\b(PPV|EVENTS?|F1 TV|MIX SPORT|MOTOGP|ESPN EXTRA)\b",Options)||Regex.IsMatch(name,@"\b(EVENT|PPV|NO EVENT STREAMING)\b",Options)?"Event":
             Regex.IsMatch(cat,@"24/7|ENJO[Y]?TV|ENJOY TV|MOVIEBOX",Options)||name.Contains("24/7",StringComparison.OrdinalIgnoreCase)?"Loop":
             Regex.IsMatch(cat,@"\bRADIO\b",Options)&&!cat.Contains("MUSIC & RADIO",StringComparison.OrdinalIgnoreCase)?"Radio":
