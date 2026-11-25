@@ -115,6 +115,8 @@ public sealed class GroupOverride
     public int GroupId { get; set; }
     public int ChannelId { get; set; }
     public bool Include { get; set; }
+    public int? Position { get; set; }
+    public bool OrderOnly { get; set; }
 }
 public sealed class PublicationSettings
 {

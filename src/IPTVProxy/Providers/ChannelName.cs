@@ -28,6 +28,9 @@ public static class ChannelName
     public static ChannelMetadata Parse(string original,string category)
     {
         var name=Normalize(original);var cat=Normalize(category);
+        name=Regex.Replace(name,@"\b(16|8|4)\s+[kKᴋ]\b","$1K",Options);
+        cat=Regex.Replace(cat,@"\b(16|8|4)\s+[kKᴋ]\b","$1K",Options);
+        name=name.Replace("ᴋ","K");cat=cat.Replace("ᴋ","K");
         var tags=new HashSet<string>(StringComparer.Ordinal);
         var separator=original.TrimStart().StartsWith("###",StringComparison.Ordinal);
         var package="";
@@ -85,7 +88,7 @@ public static class ChannelName
             || Regex.IsMatch(name,@"\b(ONLY EVENTS|LIVE DURING EVENTS)\b",Options));
         var filmLoop=nlbe && Regex.IsMatch(name,@"^VIAPLAY\s+(AKTIE|ACTION|COMEDY|DOCU|DRAMA|HORROR|KOMEDIE|MISDAAD|ROMANTIEK|SCI-FI|THRILLER)(\s+\d+)?$",Options);
         var radio=nlbe && !Regex.IsMatch(name,@"\b(TV|TELEVISIE|INFOBOX)\b|INFOBOX$",Options) &&
-            Regex.IsMatch(name,@"(?:\bWEBRADIO\b|RADIO$|^RADIONL$|FM$|^NPO\s*3FM$)",Options);
+            Regex.IsMatch(name,@"(?:\bWEBRADIO\b|RADIO$|^RADIONL$|FM$|^NPO\s*3FM$|^100% NL$|^1LIVE$)",Options);
         var type=separator?"Separator":numberedEvent?"Event":filmLoop?"Loop":radio?"Radio":
             Regex.IsMatch(cat,@"\b(PPV|EVENTS?|F1 TV|MIX SPORT|MOTOGP|ESPN EXTRA)\b",Options)||Regex.IsMatch(name,@"\b(EVENT|PPV|NO EVENT STREAMING)\b",Options)?"Event":
             Regex.IsMatch(cat,@"24/7|ENJO[Y]?TV|ENJOY TV|MOVIEBOX",Options)||name.Contains("24/7",StringComparison.OrdinalIgnoreCase)?"Loop":

@@ -10,17 +10,17 @@ public static class ManagedPublication
     public const int PublicOffset = 1_000_000_000;
     private static readonly SemaphoreSlim IdentityGate = new(1, 1);
     public sealed record Candidate(int ChannelId, int StreamId, int ProviderId, int Priority, int Limit, int Quality,
-        string Country, string Category, string Name, string Logo, string EpgId, string ChannelType = "Unknown");
+        string Country, string Category, string Name, string Logo, string EpgId, string ChannelType = "Unknown", string Package = "");
     public sealed record Published(int Id, int GroupId, int ChannelId, string Name, Candidate Source);
     public static Task<bool> IsEnabled(CatalogDb db, CancellationToken ct) =>
         db.PublicationSettings.AsNoTracking().AnyAsync(x => x.Id == 1 && x.Managed, ct);
-    private static IQueryable<Candidate> Candidates(CatalogDb db, int? channelId = null) =>
+    public static IQueryable<Candidate> Candidates(CatalogDb db, int? channelId = null) =>
         from link in db.ChannelSources.AsNoTracking()
         join s in db.LiveStreams.AsNoTracking() on link.LiveStreamId equals s.Id
         join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id
         join c in db.LiveCategories.AsNoTracking() on new { s.ProviderId, SourceId = s.CategoryId } equals new { c.ProviderId, c.SourceId }
         where (channelId == null || link.LogicalChannelId == channelId) && s.Active && p.Enabled && c.Active && !link.Separator && (!link.ReviewRequired || !db.ChannelSources.Any(other => other.LogicalChannelId == link.LogicalChannelId && other.LiveStreamId != link.LiveStreamId))
-        select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId, link.ChannelType);
+        select new Candidate(link.LogicalChannelId, s.Id, p.Id, p.Priority, p.ConnectionLimit, link.Quality, link.Country, c.Name, s.Name, s.Logo, s.EpgId, link.ChannelType, link.Package);
 
     public static Candidate[] Rank(ChannelGroup group, IEnumerable<Candidate> candidates, int preferredStreamId = 0)
     {
@@ -36,7 +36,7 @@ public static class ManagedPublication
             .Concat(group.LowerFallback ? Sort(lower) : []).ToArray();
     }
     private static bool Contains(string value, string filter) => string.IsNullOrWhiteSpace(filter) || value.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
-    private static Candidate[] Eligible(ChannelGroup group, LogicalChannel channel, IEnumerable<Candidate> candidates, bool? manual)
+    public static Candidate[] Eligible(ChannelGroup group, LogicalChannel channel, IEnumerable<Candidate> candidates, bool? manual)
     {
         if (manual == false || (manual is null && !group.Automatic)) return [];
         if (manual is null && !Contains(channel.Name, group.NameContains)) return [];
@@ -45,21 +45,22 @@ public static class ManagedPublication
              && Contains(c.Category, group.CategoryContains)));
         return Rank(group, sources, channel.PreferredStreamId);
     }
-    public static async Task<List<Published>> ListAsync(CatalogDb db, int? groupId, CancellationToken ct)
+    public static async Task<List<Published>> ListAsync(CatalogDb db, int? groupId, CancellationToken ct, bool allocateIdentities = true)
     {
         var groups = await db.ChannelGroups.AsNoTracking().Where(g => g.Enabled && (groupId == null || g.Id == groupId)).OrderBy(g => g.SortOrder).ThenBy(g => g.Id).ToListAsync(ct);
         if (groups.Count == 0) return [];
         var channels = await db.LogicalChannels.AsNoTracking().Where(c=>db.ChannelSources.Any(l=>l.LogicalChannelId==c.Id && db.LiveStreams.Any(s=>s.Id==l.LiveStreamId && s.Active))).OrderBy(c => c.Name).ThenBy(c => c.Id).ToListAsync(ct);
         var sources = (await Candidates(db).ToListAsync(ct)).ToLookup(c => c.ChannelId);
-        var overrides = (await db.GroupOverrides.AsNoTracking().ToListAsync(ct)).ToDictionary(x => (x.GroupId,x.ChannelId), x => x.Include);
+        var overrides = (await db.GroupOverrides.AsNoTracking().ToListAsync(ct)).ToDictionary(x => (x.GroupId,x.ChannelId), x => x);
         var result = new List<Published>();
         foreach (var group in groups)
-            foreach (var channel in channels)
+            foreach (var channel in channels.OrderBy(c => overrides.GetValueOrDefault((group.Id,c.Id))?.Position ?? int.MaxValue).ThenBy(c=>c.Name).ThenBy(c=>c.Id))
             {
-                bool? manual = overrides.TryGetValue((group.Id,channel.Id), out var include) ? include : null;
+                bool? manual = overrides.TryGetValue((group.Id,channel.Id), out var include) && !include.OrderOnly ? include.Include : null;
                 var ranked = Eligible(group, channel, sources[channel.Id], manual);
                 if (ranked.Length > 0) result.Add(new(0, group.Id, channel.Id, channel.Name, ranked[0]));
             }
+        if (!allocateIdentities) return result;
         await IdentityGate.WaitAsync(ct);
         try
         {
@@ -87,7 +88,7 @@ public static class ManagedPublication
         var group = await db.ChannelGroups.AsNoTracking().SingleOrDefaultAsync(x => x.Id == groupId && x.Enabled, ct);
         var channel = await db.LogicalChannels.AsNoTracking().SingleOrDefaultAsync(x => x.Id == channelId, ct);
         if (group is null || channel is null) return [];
-        var manual = await db.GroupOverrides.AsNoTracking().Where(x => x.GroupId == groupId && x.ChannelId == channelId).Select(x => (bool?)x.Include).SingleOrDefaultAsync(ct);
+        var manual = await db.GroupOverrides.AsNoTracking().Where(x => x.GroupId == groupId && x.ChannelId == channelId).Select(x => x.OrderOnly ? (bool?)null : x.Include).SingleOrDefaultAsync(ct);
         return Eligible(group, channel, await Candidates(db, channelId).ToListAsync(ct), manual);
     }
 }

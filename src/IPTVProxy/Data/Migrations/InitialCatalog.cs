@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true, bool classification = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true, bool preferences = true, bool metadata = true, bool classification = true, bool ordering = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -138,6 +138,7 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             model.Entity<GroupOverride>(e => {
                 e.ToTable("GroupOverrides"); e.HasKey(x => new { x.GroupId, x.ChannelId });
                 e.Property(x => x.Include);
+                if(ordering){e.Property(x=>x.Position);e.Property(x=>x.OrderOnly);}else{e.Ignore(x=>x.Position);e.Ignore(x=>x.OrderOnly);}
                 e.HasIndex(x => x.ChannelId);
                 e.HasOne<ChannelGroup>().WithMany().HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.Cascade);
                 e.HasOne<LogicalChannel>().WithMany().HasForeignKey(x => x.ChannelId).OnDelete(DeleteBehavior.Cascade);

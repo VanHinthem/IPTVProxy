@@ -13,19 +13,49 @@
 <table><thead><tr><th>Groep</th><th>Land</th><th>Minimum</th><th>Actief</th><th></th></tr></thead><tbody>
 @foreach (var g in groups)
 {
-    <tr><td>@g.Name</td><td>@g.Country</td><td>@g.MinimumQuality</td><td>@g.Enabled</td><td><button @onclick="() => Edit(g)">Wijzigen</button> <button @onclick="() => Preview(g.Id)">Voorbeeld</button></td></tr>
+    <tr><td>@g.Name</td><td>@g.Country</td><td>@g.MinimumQuality</td><td>@g.Enabled</td><td><button @onclick="() => Edit(g)">Wijzigen</button> <button @onclick="() => Preview(g.Id)">Kanalen beheren</button></td></tr>
 }
 </tbody></table>
-@if (previewCount >= 0)
+@if (selectedGroup is not null)
 {
-    <p>@previewCount publiceerbare kanalen in geselecteerde groep.</p>
-    <ul>@foreach (var name in previewNames) { <li>@name</li> }</ul>
+    <h2>@selectedGroup.Name — kanalen</h2>
+    <p>@rows.Count(x=>x.Selected) publiceerbare kanalen · @rows.Count beschikbare kandidaten in huidige zoekopdracht</p>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <input placeholder="Zoek kanaal" @bind="search" @bind:event="oninput" />
+        <button @onclick="ReloadRows">Zoeken</button>
+        <select @bind="view"><option value="all">Alle kandidaten</option><option value="selected">Geselecteerd</option><option value="excluded">Niet geselecteerd</option></select>
+        <button @onclick="()=>Bulk(true)">Selecteer zichtbare</button>
+        <button @onclick="()=>Bulk(false)">Sluit zichtbare uit</button>
+        <button @onclick="()=>Bulk(null)">Herstel automatische selectie (zichtbare)</button>
+        <button @onclick="Alphabetical">Alfabetische volgorde</button>
+    </div>
+    <p>Maximaal 100 rijen per pagina. Zoek ook buiten de automatische groepsfilters om handmatig toe te voegen. Kwaliteits-, provider- en typevoorwaarden blijven gelden.</p>
+    <table><thead><tr><th>Publicatie</th><th>Kanaal</th><th>Geselecteerde bron</th><th>Bronnen</th><th>Volgorde</th></tr></thead><tbody>
+    @foreach(var r in Visible())
+    {
+        <tr><td><input type="checkbox" checked="@r.Selected" @onchange="e=>Set(r.Id,e.Value is true)" /><button @onclick="()=>Set(r.Id,null)">Auto</button></td>
+        <td>@r.Name @if(r.Override is not null){<small> (handmatig)</small>}</td>
+        <td>@(r.Best is null?"Niet publiceerbaar":ProviderName(r.Best.ProviderId)+" / "+Quality(r.Best.Quality))</td>
+        <td><button @onclick="()=>expanded=expanded==r.Id?0:r.Id">@r.Sources.Length bronnen</button></td>
+        <td><button disabled="@(!r.Selected)" @onclick="()=>Move(r.Id,-1)">↑</button> <button disabled="@(!r.Selected)" @onclick="()=>Move(r.Id,1)">↓</button></td></tr>
+        @if(expanded==r.Id)
+        {
+            <tr><td colspan="5"><table><thead><tr><th>Provider</th><th>Pakket / categorie</th><th>Origineel</th><th>Kwaliteit</th><th></th></tr></thead><tbody>
+            @foreach(var s in r.Sources)
+            {
+                <tr><td>@ProviderName(s.ProviderId)</td><td>@s.Package / @s.Category</td><td>@s.Name</td><td>@Quality(s.Quality)</td><td>@if(r.Best?.StreamId==s.StreamId){<strong>Geselecteerd</strong>} <button @onclick="()=>Prefer(r.Id,s.StreamId)">Voorkeur (globaal)</button></td></tr>
+            }
+            </tbody></table><button @onclick="()=>Prefer(r.Id,0)">Wis globale voorkeur</button></td></tr>
+        }
+    }
+    </tbody></table>
+    <button disabled="@(page==0)" @onclick="()=>page--">Vorige</button> <span>Pagina @(page+1)</span> <button disabled="@(Filtered().Count() <= (page+1)*100)" @onclick="()=>page++">Volgende</button>
 }
 <h2>@(edit.Id == 0 ? "Nieuwe groep" : "Groep wijzigen")</h2>
 <div style="display:grid;gap:.5rem;max-width:32rem">
 <label>Naam <input @bind="edit.Name" maxlength="100" /></label>
 <label><input type="checkbox" @bind="edit.Enabled" /> Actief</label>
-<label><input type="checkbox" @bind="edit.Automatic" /> Automatische selectie</label>
+<label><input type="checkbox" @bind="edit.Automatic" /> Automatische selectie (met handmatige uitzonderingen); uit = handmatig</label>
 <label>Landcodes (bijv. NL,BE) <input @bind="edit.Country" /></label>
 <label>Kanaalnaam bevat <input @bind="edit.NameContains" /></label>
 <label>Providercategorie bevat <input @bind="edit.CategoryContains" /></label>
@@ -44,13 +74,82 @@
     private List<Provider> providers = [];
     private ChannelGroup edit = new();
     private bool managed;
-    private int previewCount = -1;
-    private List<string> previewNames = [];
+    private sealed record Row(int Id,string Name,bool Selected,bool? Override,int? Position,ManagedPublication.Candidate? Best,ManagedPublication.Candidate[] Sources);
+    private ChannelGroup? selectedGroup;
+    private List<Row> rows=[];
+    private string search="",view="all";
+    private int page,expanded;
+    private string ProviderName(int id)=>providers.FirstOrDefault(p=>p.Id==id)?.Name ?? id.ToString();
+    private static string Quality(int q)=>q switch{2160=>"4K",1080=>"FHD",720=>"HD",480=>"SD",_=>"Onbekend"};
+    private IEnumerable<Row> Filtered()=>rows.Where(r=>view=="all" || (view=="selected"?r.Selected:!r.Selected));
+    private IEnumerable<Row> Visible()=>Filtered().Skip(page*100).Take(100);
     private async Task Preview(int id)
     {
-        await using var db = await Factory.CreateDbContextAsync();
-        var rows = await ManagedPublication.ListAsync(db,id,CancellationToken.None);
-        previewCount = rows.Count; previewNames = rows.Take(30).Select(x => x.Name + " — " + x.Source.Name + " (provider " + x.Source.ProviderId + ", " + (x.Source.Quality==0?"kwaliteit onbekend":x.Source.Quality.ToString()) + ")").ToList();
+        selectedGroup=groups.Single(g=>g.Id==id);search="";view="all";page=0;expanded=0;await ReloadRows();
+    }
+    private async Task ReloadRows()
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var g=selectedGroup;
+        var sources=(await ManagedPublication.Candidates(db).ToListAsync()).ToLookup(s=>s.ChannelId);
+        var overrides=await db.GroupOverrides.AsNoTracking().Where(x=>x.GroupId==g.Id).ToDictionaryAsync(x=>x.ChannelId);
+        var channels=await db.LogicalChannels.AsNoTracking().ToListAsync();
+        rows=channels.Where(c=>sources[c.Id].Any()).Select(c=>{
+            var o=overrides.GetValueOrDefault(c.Id);
+            bool? membership=o is null || o.OrderOnly?null:o.Include;
+            var all=sources[c.Id].ToArray();
+            var automatic=ManagedPublication.Eligible(g,c,all,null);
+            var ranked=ManagedPublication.Eligible(g,c,all,membership);
+            var eligible=ManagedPublication.Eligible(g,c,all,true);
+            return new {row=new Row(c.Id,c.Name,ranked.Length>0,membership,o?.Position,ranked.FirstOrDefault()??eligible.FirstOrDefault(),all), automatic=automatic.Length>0};
+        }).Where(x=> (search.Length>0 ? x.row.Name.Contains(search,StringComparison.OrdinalIgnoreCase) : x.automatic || x.row.Override is not null || (!g.Automatic && x.row.Sources.Any(s=>string.IsNullOrWhiteSpace(g.Country)||g.Country.Split(',',StringSplitOptions.TrimEntries).Contains(s.Country,StringComparer.OrdinalIgnoreCase)))))
+        .Select(x=>x.row).OrderBy(x=>x.Position??int.MaxValue).ThenBy(x=>x.Name).ThenBy(x=>x.Id).ToList();
+        page=0;
+    }
+    private async Task Set(int id,bool? include)=>await SetMany([id],include);
+    private async Task Bulk(bool? include)=>await SetMany(Visible().Select(r=>r.Id).ToArray(),include);
+    private async Task SetMany(int[] ids,bool? include)
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();var gid=selectedGroup.Id;
+        var existing=await db.GroupOverrides.Where(x=>x.GroupId==gid&&ids.Contains(x.ChannelId)).ToDictionaryAsync(x=>x.ChannelId);
+        foreach(var id in ids)
+        {
+            var o=existing.GetValueOrDefault(id);
+            if(include is null){if(o is not null){if(o.Position is null)db.Remove(o);else o.OrderOnly=true;}continue;}
+            if(o is null)db.Add(new GroupOverride{GroupId=gid,ChannelId=id,Include=include.Value});
+            else {o.Include=include.Value;o.OrderOnly=false;}
+        }
+        await db.SaveChangesAsync();await ReloadRows();
+    }
+    private async Task Prefer(int id,int stream)
+    {
+        await using var db=await Factory.CreateDbContextAsync();var c=await db.LogicalChannels.SingleAsync(x=>x.Id==id);
+        c.PreferredStreamId=stream;await db.SaveChangesAsync();await ReloadRows();
+    }
+    private async Task Move(int id,int delta)
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();var gid=selectedGroup.Id;
+        var published=await ManagedPublication.ListAsync(db,gid,CancellationToken.None,false);
+        var ids=published.Select(x=>x.ChannelId).ToList();var i=ids.IndexOf(id);var j=i+delta;
+        if(i<0||j<0||j>=ids.Count)return;
+        (ids[i],ids[j])=(ids[j],ids[i]);
+        var existing=await db.GroupOverrides.Where(x=>x.GroupId==gid).ToDictionaryAsync(x=>x.ChannelId);
+        for(var k=0;k<ids.Count;k++)
+        {
+            if(!existing.TryGetValue(ids[k],out var o)){o=new GroupOverride{GroupId=gid,ChannelId=ids[k],Include=true,OrderOnly=true};db.Add(o);}
+            o.Position=k;
+        }
+        await db.SaveChangesAsync();await ReloadRows();
+    }
+    private async Task Alphabetical()
+    {
+        if(selectedGroup is null)return;
+        await using var db=await Factory.CreateDbContextAsync();var gid=selectedGroup.Id;
+        foreach(var o in await db.GroupOverrides.Where(x=>x.GroupId==gid).ToListAsync()){if(o.OrderOnly)db.Remove(o);else o.Position=null;}
+        await db.SaveChangesAsync();await ReloadRows();
     }
     private string message = "";
     protected override async Task OnInitializedAsync() => await Load();
@@ -70,7 +169,7 @@
             await using var db = await Factory.CreateDbContextAsync();
             if (edit.Id == 0) db.ChannelGroups.Add(edit); else db.ChannelGroups.Update(edit);
             await db.SaveChangesAsync();
-            message="Groep opgeslagen."; New(); await Load();
+            message="Groep opgeslagen."; selectedGroup=null; New(); await Load();
         } catch { message="Opslaan mislukt."; }
     }
     private async Task Toggle(ChangeEventArgs e)
