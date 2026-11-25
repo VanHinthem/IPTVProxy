@@ -5,15 +5,10 @@ namespace IPTVProxy.Providers;
 
 public static class ManagedPublication
 {
-    // Separate namespace from positive legacy provider IDs. Group-specific publication
-    // rules must remain distinguishable even if a channel belongs to multiple groups.
-    // Stable pair encoding, bounded by the int Xtream route; fail closed on overflow.
-    public const int GroupStride = 100000;
-    public static int PublicId(int groupId, int channelId)
-    {
-        if (groupId <= 0 || channelId <= 0 || channelId >= GroupStride) throw new InvalidOperationException("Publication ID capacity exceeded.");
-        return checked(-(groupId * GroupStride + channelId));
-    }
+    // Managed and raw catalogs are mutually exclusive. Published IDs are durable,
+    // positive database identities, independent of source and group/channel numbering.
+    public const int PublicOffset = 1_000_000_000;
+    private static readonly SemaphoreSlim IdentityGate = new(1, 1);
     public sealed record Candidate(int ChannelId, int StreamId, int ProviderId, int Priority, int Limit, int Quality,
         string Country, string Category, string Name, string Logo, string EpgId);
     public sealed record Published(int Id, int GroupId, int ChannelId, string Name, Candidate Source);
@@ -63,16 +58,32 @@ public static class ManagedPublication
             {
                 bool? manual = overrides.TryGetValue((group.Id,channel.Id), out var include) ? include : null;
                 var ranked = Eligible(group, channel, sources[channel.Id], manual);
-                if (ranked.Length > 0) result.Add(new(PublicId(group.Id, channel.Id), group.Id, channel.Id, channel.Name, ranked[0]));
+                if (ranked.Length > 0) result.Add(new(0, group.Id, channel.Id, channel.Name, ranked[0]));
             }
-        return result;
+        await IdentityGate.WaitAsync(ct);
+        try
+        {
+            var identities = (await db.PublishedIdentities.AsNoTracking().ToListAsync(ct))
+                .ToDictionary(x => (x.GroupId, x.ChannelId));
+            foreach (var row in result)
+                if (!identities.ContainsKey((row.GroupId, row.ChannelId)))
+                {
+                    var identity = new PublishedIdentity { GroupId = row.GroupId, ChannelId = row.ChannelId };
+                    db.PublishedIdentities.Add(identity);
+                    identities.Add((row.GroupId, row.ChannelId), identity);
+                }
+            await db.SaveChangesAsync(ct);
+            return result.Select(x => x with { Id = checked(PublicOffset + identities[(x.GroupId, x.ChannelId)].Id) }).ToList();
+        }
+        finally { IdentityGate.Release(); }
     }
     public static async Task<Candidate[]> ResolveAsync(CatalogDb db, int publicId, CancellationToken ct)
     {
-        if (publicId >= 0 || publicId == int.MinValue || !await IsEnabled(db, ct)) return [];
-        var key = -publicId;
-        var groupId = key / GroupStride;
-        var channelId = key % GroupStride;
+        if (publicId <= PublicOffset || !await IsEnabled(db, ct)) return [];
+        var identity = await db.PublishedIdentities.AsNoTracking().SingleOrDefaultAsync(x => x.Id == publicId - PublicOffset, ct);
+        if (identity is null) return [];
+        var groupId = identity.GroupId;
+        var channelId = identity.ChannelId;
         var group = await db.ChannelGroups.AsNoTracking().SingleOrDefaultAsync(x => x.Id == groupId && x.Enabled, ct);
         var channel = await db.LogicalChannels.AsNoTracking().SingleOrDefaultAsync(x => x.Id == channelId, ct);
         if (group is null || channel is null) return [];

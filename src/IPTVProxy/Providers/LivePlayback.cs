@@ -48,7 +48,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         log.LogInformation("Playback requested: stream {StreamId}", id);
         if (!accounts.IptvValid(username, password)) { ctx.Response.StatusCode = 401; return; }
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
-        if (id < 0)
+        if (id > ManagedPublication.PublicOffset)
         {
             var candidates = await ManagedPublication.ResolveAsync(db, id, ctx.RequestAborted);
             if (candidates.Length == 0) { ctx.Response.StatusCode = 404; return; }

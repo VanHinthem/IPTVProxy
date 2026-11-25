@@ -47,7 +47,7 @@ public sealed class InitialCatalog : Migration
 public sealed class CatalogModelSnapshot : ModelSnapshot
 {
     protected override void BuildModel(ModelBuilder modelBuilder) => Build(modelBuilder);
-    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true)
+    internal static void Build(ModelBuilder model, bool managedChannels = true, bool groups = true, bool identities = true)
     {
         model.HasAnnotation("ProductVersion", "10.0.0");
         model.Entity<Provider>(e => {
@@ -139,6 +139,17 @@ public sealed class CatalogModelSnapshot : ModelSnapshot
             model.Entity<PublicationSettings>(e => {
                 e.ToTable("PublicationSettings"); e.HasKey(x => x.Id);
                 e.Property(x => x.Id).ValueGeneratedOnAdd(); e.Property(x => x.Managed);
+            });
+        }
+        if (managedChannels && groups && identities)
+        {
+            model.Entity<PublishedIdentity>(e => {
+                e.ToTable("PublishedIdentities"); e.HasKey(x => x.Id);
+                e.Property(x => x.Id).ValueGeneratedOnAdd();
+                e.HasIndex(x => new { x.GroupId, x.ChannelId }).IsUnique();
+                e.HasIndex(x => x.ChannelId);
+                e.HasOne<ChannelGroup>().WithMany().HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.Cascade);
+                e.HasOne<LogicalChannel>().WithMany().HasForeignKey(x => x.ChannelId).OnDelete(DeleteBehavior.Cascade);
             });
         }
     }

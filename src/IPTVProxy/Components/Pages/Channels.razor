@@ -9,10 +9,10 @@
 <label>Zoeken <input @bind="search" /></label>
 <label><input type="checkbox" @bind="review" /> Alleen te beoordelen</label>
 <button @onclick="Search">Zoeken</button>
-<table><thead><tr><th>Naam</th><th>Land</th><th>Bronnen</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>ID</th><th>Naam</th><th>Land</th><th>Bronnen</th><th></th></tr></thead><tbody>
 @foreach(var c in rows)
 {
-    <tr><td>@c.Name</td><td>@c.Country</td><td>@c.Count</td><td><button @onclick="() => Details(c.Id)">Bronnen</button></td></tr>
+    <tr><td>@c.Id</td><td>@c.Name</td><td>@c.Country</td><td>@c.Count</td><td><button @onclick="() => Details(c.Id)">Bronnen</button></td></tr>
 }
 </tbody></table>
 <button disabled="@(page == 0)" @onclick="Previous">Vorige</button> Pagina @(page + 1) <button disabled="@(rows.Count < 100)" @onclick="Next">Volgende</button>
@@ -22,9 +22,11 @@
     <table><thead><tr><th>Provider</th><th>Originele naam</th><th>Kwaliteit (label)</th><th>Review</th></tr></thead><tbody>
     @foreach(var s in details)
     {
-        <tr><td>@s.Provider</td><td>@s.Name</td><td>@s.Quality</td><td>@s.Review</td></tr>
+        <tr><td>@s.Provider</td><td>@s.Name</td><td>@s.Quality</td><td>@s.Review <button @onclick="() => Confirm(s.Id)">Bevestigen</button> <button @onclick="() => Split(s.Id)">Splitsen</button></td></tr>
     }
     </tbody></table>
+    <label>Doelkanaal-ID <input type="number" @bind="targetId" /></label>
+    <button @onclick="Merge">Samenvoegen met doelkanaal</button>
     <label>Groep <select @bind="groupId"><option value="0">Kies groep</option>@foreach(var g in groups){<option value="@g.Id">@g.Name</option>}</select></label>
     <button @onclick="() => Override(true)">Toevoegen</button>
     <button @onclick="() => Override(false)">Uitsluiten</button>
@@ -33,13 +35,13 @@
 <p role="status">@message</p>
 @code {
     private record Row(int Id,string Name,string Country,int Count);
-    private record Source(string Provider,string Name,int Quality,bool Review);
+    private record Source(int Id,string Provider,string Name,int Quality,bool Review);
     private List<Row> rows = [];
     private List<Source> details = [];
     private List<ChannelGroup> groups = [];
     private string search="", message="";
     private bool review;
-    private int page,total,sourceCount,reviewCount,selected,groupId;
+    private int page,total,sourceCount,reviewCount,selected,groupId,targetId;
     protected override async Task OnInitializedAsync() => await Load();
     private async Task Search(){page=0;await Load();}
     private async Task Previous(){if(page>0)page--;await Load();}
@@ -60,7 +62,37 @@
     {
         selected=id;
         await using var db=await Factory.CreateDbContextAsync();
-        details=await (from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id where l.LogicalChannelId==id && s.Active orderby p.Priority, l.Quality descending select new Source(p.Name,s.Name,l.Quality,l.ReviewRequired)).Take(500).ToListAsync();
+        details=await (from l in db.ChannelSources.AsNoTracking() join s in db.LiveStreams.AsNoTracking() on l.LiveStreamId equals s.Id join p in db.Providers.AsNoTracking() on s.ProviderId equals p.Id where l.LogicalChannelId==id && s.Active orderby p.Priority, l.Quality descending select new Source(s.Id,p.Name,s.Name,l.Quality,l.ReviewRequired)).Take(500).ToListAsync();
+    }
+    private async Task Confirm(int id)
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        var link=await db.ChannelSources.SingleAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected);
+        link.Manual=true;link.ReviewRequired=false;
+        await db.SaveChangesAsync();await Details(selected);await Load();
+    }
+    private async Task Split(int id)
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        var link=await db.ChannelSources.SingleAsync(x=>x.LiveStreamId==id && x.LogicalChannelId==selected);
+        var old=await db.LogicalChannels.SingleAsync(x=>x.Id==selected);
+        old.Manual=true;
+        link.LogicalChannel=new LogicalChannel{Name=link.NormalizedName,Country=link.Country,MatchKey=old.MatchKey,Manual=true};
+        link.Manual=true;link.ReviewRequired=false;
+        await db.SaveChangesAsync();await Details(selected);await Load();
+    }
+    private async Task Merge()
+    {
+        if(targetId<=0 || targetId==selected)return;
+        await using var db=await Factory.CreateDbContextAsync();
+        var target=await db.LogicalChannels.FindAsync(targetId);
+        var old=await db.LogicalChannels.FindAsync(selected);
+        if(target is null || old is null){message="Doelkanaal niet gevonden.";return;}
+        old.Manual=true;target.Manual=true;
+        foreach(var link in await db.ChannelSources.Where(x=>x.LogicalChannelId==selected).ToListAsync())
+        {link.LogicalChannelId=targetId;link.Manual=true;link.ReviewRequired=false;}
+        await db.SaveChangesAsync();message="Bronnen verplaatst; groepsinstellingen van het oude kanaal blijven bewaard.";
+        await Details(targetId);await Load();
     }
     private async Task Override(bool? include)
     {

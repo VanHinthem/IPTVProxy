@@ -12,9 +12,14 @@
 <table><thead><tr><th>Groep</th><th>Land</th><th>Minimum</th><th>Actief</th><th></th></tr></thead><tbody>
 @foreach (var g in groups)
 {
-    <tr><td>@g.Name</td><td>@g.Country</td><td>@g.MinimumQuality</td><td>@g.Enabled</td><td><button @onclick="() => Edit(g)">Wijzigen</button></td></tr>
+    <tr><td>@g.Name</td><td>@g.Country</td><td>@g.MinimumQuality</td><td>@g.Enabled</td><td><button @onclick="() => Edit(g)">Wijzigen</button> <button @onclick="() => Preview(g.Id)">Voorbeeld</button></td></tr>
 }
 </tbody></table>
+@if (previewCount >= 0)
+{
+    <p>@previewCount publiceerbare kanalen in geselecteerde groep.</p>
+    <ul>@foreach (var name in previewNames) { <li>@name</li> }</ul>
+}
 <h2>@(edit.Id == 0 ? "Nieuwe groep" : "Groep wijzigen")</h2>
 <div style="display:grid;gap:.5rem;max-width:32rem">
 <label>Naam <input @bind="edit.Name" maxlength="100" /></label>
@@ -37,6 +42,14 @@
     private List<Provider> providers = [];
     private ChannelGroup edit = new();
     private bool managed;
+    private int previewCount = -1;
+    private List<string> previewNames = [];
+    private async Task Preview(int id)
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        var rows = await ManagedPublication.ListAsync(db,id,CancellationToken.None);
+        previewCount = rows.Count; previewNames = rows.Take(30).Select(x => x.Name + " — " + x.Source.Name).ToList();
+    }
     private string message = "";
     protected override async Task OnInitializedAsync() => await Load();
     private async Task Load()
@@ -62,7 +75,7 @@
     {
         var enabled = e.Value is true;
         await using var db = await Factory.CreateDbContextAsync();
-        if (enabled && !await db.ChannelGroups.AnyAsync(x => x.Enabled)) { message="Maak eerst een actieve groep."; return; }
+        if (enabled && (await ManagedPublication.ListAsync(db,null,CancellationToken.None)).Count == 0) { message="Maak eerst een actieve groep."; return; }
         var settings = await db.PublicationSettings.SingleAsync(x => x.Id == 1);
         settings.Managed = enabled; await db.SaveChangesAsync(); await Load();
     }

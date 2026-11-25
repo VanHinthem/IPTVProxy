@@ -11,9 +11,13 @@ public sealed class CatalogDb(DbContextOptions<CatalogDb> options) : DbContext(o
     public DbSet<ChannelSource> ChannelSources => Set<ChannelSource>();
     public DbSet<ChannelGroup> ChannelGroups => Set<ChannelGroup>();
     public DbSet<GroupOverride> GroupOverrides => Set<GroupOverride>();
+    public DbSet<PublishedIdentity> PublishedIdentities => Set<PublishedIdentity>();
     public DbSet<PublicationSettings> PublicationSettings => Set<PublicationSettings>();
     protected override void OnModelCreating(ModelBuilder model)
     {
+        model.Entity<PublishedIdentity>().HasIndex(x => new { x.GroupId, x.ChannelId }).IsUnique();
+        model.Entity<PublishedIdentity>().HasOne<ChannelGroup>().WithMany().HasForeignKey(x => x.GroupId);
+        model.Entity<PublishedIdentity>().HasOne<LogicalChannel>().WithMany().HasForeignKey(x => x.ChannelId);
         model.Entity<GroupOverride>().HasKey(x => new { x.GroupId, x.ChannelId });
         model.Entity<GroupOverride>().HasOne<ChannelGroup>().WithMany().HasForeignKey(x => x.GroupId);
         model.Entity<GroupOverride>().HasOne<LogicalChannel>().WithMany().HasForeignKey(x => x.ChannelId);
@@ -107,4 +111,11 @@ public sealed class PublicationSettings
 {
     public int Id { get; set; }
     public bool Managed { get; set; }
+}
+
+public sealed class PublishedIdentity
+{
+    public int Id { get; set; }
+    public int GroupId { get; set; }
+    public int ChannelId { get; set; }
 }
