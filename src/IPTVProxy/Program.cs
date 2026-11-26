@@ -11,6 +11,7 @@ using System.Threading.RateLimiting;
 var builder = WebApplication.CreateBuilder(args);
 // Request URLs and upstream exceptions can contain credentials.
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.None);
+// Do not enable framework exception/URL logging; record only circuit lifecycle and safe status codes ourselves.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.None);
 builder.Logging.AddFilter("System.Net.Http", LogLevel.None);
 var dataDir = Path.GetFullPath(builder.Configuration["DataDirectory"] ?? "data");
@@ -20,8 +21,14 @@ builder.Services.AddDbContextFactory<CatalogDb>(options => options.UseSqlite(new
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddSingleton<LocalAccounts>();
 builder.Services.AddSingleton<LiveCatalog>();
+builder.Services.AddSingleton<CatalogHistory>();
 builder.Services.AddHostedService<CatalogRefresh>();
 builder.Services.AddSingleton<LivePlayback>();
+builder.Services.AddSingleton<ProviderConnectionCoordinator>();
+builder.Services.AddSingleton<VodCatalog>();
+builder.Services.AddSingleton<VodPublication>();
+builder.Services.AddSingleton<VodPlayback>();
+builder.Services.AddSingleton<VodRequestCoordinator>();
 builder.Services.AddSingleton<ProviderEpg>();
 builder.Services.AddSingleton<ArtworkService>();
 builder.Services.AddSingleton<XmlTvGuide>();
@@ -66,6 +73,19 @@ await using (var scope = app.Services.CreateAsyncScope())
     }
 }
 app.UseRouting();
+app.Use(async (ctx,next)=>{
+    if(ctx.Request.Path.StartsWithSegments("/movie")||ctx.Request.Path.StartsWithSegments("/series"))
+    {
+        try { await next(); }
+        finally { app.Logger.LogInformation("VOD HTTP {Method}, matched {Matched}, status {Status}",ctx.Request.Method,ctx.GetEndpoint() is RouteEndpoint,ctx.Response.StatusCode); }
+    }
+    else await next();
+});
+app.Use(async (ctx,next)=>{
+    if(ctx.Request.Path.StartsWithSegments("/_blazor")){
+        try{await next();}finally{if(ctx.Response.StatusCode>=400)app.Logger.LogWarning("Blazor transport rejected: HTTP {Status}",ctx.Response.StatusCode);}
+    }else await next();
+});
 app.UseRateLimiter();
 app.Use(async (ctx, next) => await AdminGate.Invoke(ctx, next, app.Services.GetRequiredService<LocalAccounts>()));
 app.UseAntiforgery();

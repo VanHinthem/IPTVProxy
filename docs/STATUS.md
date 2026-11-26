@@ -41,3 +41,34 @@ NAS cd51e25: user accepted group-management increment. Artwork adds signed local
 NAS 01546f8: zenderlogo's zichtbaar en geaccepteerd. EPG eerder bevestigd; groepsbeheer algemeen geaccepteerd. SQLite: SuperTV 157637 en Strong8K 238844 programma's, beide 0 artwork; refresh na upgrade en originele XMLTV-artwork niet bevestigd. Programma-afbeeldingen niet afzonderlijk getest. CI 45637782018 en Development image 45637768770 groen. PR #6 gereed voor review na afsluitende documentatie en aanvullende regressiechecks. #2 sluit bij merge; #3 films/series volgt. Niet-blokkerende verbeteringen: https://github.com/VanHinthem/IPTVProxy/issues/7. Externe toegang voor meerdere gebruikers, capaciteit, actieve failover en monitoring blijven #4. Geen migratie van raw favorieten. Geen nieuwe NAS-deployment nodig voor alleen documentatie/tests.
 
 PR #6 gemerged op 25 november 2026 (d0ce164). Afsluitende CI 45640294542 en image 45640277665 groen. #2 afgerond; #3 is volgend werkblok.
+
+## Werkblok 3 — eerste increment (26 november 2026)
+Featurebranch: volledige handmatige film/serie-import, standaard niet gepubliceerd; eenvoudige categorie-selectie, Xtream catalogus/details, stabiele film/serie/episode-ID's, detailcache, native Range-proxy en gedeelde providerreserveringen. Geen custom categorieën of periodieke VOD-import in dit increment. Providerformaten, NAS-playback en CI nog te valideren. Alleen geautoriseerde bronnen.
+
+NAS initial VOD: films, posters and descriptions visible; movie and episode playback retry without error. Added sanitized request/route/capacity/upstream diagnostics, extensionless routes and movie_data.id compatibility. Actual cause not yet established. CI/NAS retest pending.
+
+NAS 0f8ab46: movie upstream HTTP 200 and first bytes confirmed; concurrent Range requests rejected by local provider limit 1. Added opt-in via existing single-viewer switch setting, same-asset VOD request replacement with cancellation and wait for upstream release; never evicts live or increases capacity. Sequential handoff may not suffice for clients requiring truly parallel ranges. CI and real playback/seek pending.
+
+## Werkblok 3 — increment 1 NAS-acceptatie (26 november 2026)
+NAS 135f8e2: SuperTV filmplayback, beeld/geluid en seek; Strong8K film- en serieplayback; Live TV bevestigd. Posters, beschrijvingen, catalogus en selectie eerder bevestigd. Geen extra videocache nodig. SuperTV serie niet afzonderlijk bevestigd; multi-user en echte parallelle ranges blijven #4.
+
+## Increment 2
+Eigen VOD-categorieën met broncategorieën uit beide providers, hernoemen, aan/uit, verwijderen, zoek/bulkselectie, publicatievolgorde en titelzoeker. Eén broncategorie kan aan maximaal één eigen categorie gekoppeld zijn; deze vervangt dan originele publicatie. Bestaande selectievlaggen blijven bewaard en worden weer actief na loskoppelen. Film/serie/episode-ID's blijven ongewijzigd; custom category IDs gebruiken apart positief bereik. Geen wijzigingen aan streaming. CI/NAS nog te valideren.
+
+NAS 6100a87: user reports all increment 2 functions working except title search. Fixed nullable SQLite publication predicate for unselected ungrouped categories (GetBoolean on NULL), added local feedback and debounced search, regression checks for visible/hidden titles and content type. Retest pending.
+
+NAS e6562be: user reports Lioness visible in IPTV app but absent from title search. NAS SQL confirms active matching movie and series rows for both providers. Decoupled title search content type from category management; default all films/series, explicit type filter and result type column; added combined search regression checks. Original missing-result cause not yet independently confirmed; NAS retest required.
+
+NAS dacbd29: Lioness is zichtbaar in onafhankelijke titelzoeker. Increment 2 functioneel geaccepteerd.
+
+## Increment 3 — cataloguswijzigingen en automatische imports
+Generieke transactionele importhistorie voor Live TV, films en series, per provider en type. Bestaande records vormen baseline; geen fictieve toevoegingsdatum. Nieuwe, teruggekeerde en verdwenen broncategorieën/titels/kanalen geregistreerd, plus beschikbaarheid van logische kanalen over providers heen (geen claim dat een teruggekeerd logisch kanaal nieuw is). Standaard Live 6 uur, VOD 24 uur; 0 schakelt automatische import uit, per provider/type instelbaar. Eerste geplande import na upgrade; fouten bewaren vorige catalogus en retry na maximaal 15 minuten. Geen wijzigingen aan playback of publicatie-ID's. UI, CI en NAS nog te testen. Historie vanaf upgrade, geen retrospectieve providerhistorie; geen episode-level of handmatige eigen-groepswijzigingen in deze ronde.
+
+NAS 798a832: interval inputs displayed blank, no visible active import feedback. Follow-up uses explicit invariant numeric value, per-provider/type in-memory queued/running state, duplicate request rejection, refreshed schedule checks and 3-second UI polling preserving unsaved edits; timestamps displayed Europe/Amsterdam. Exact blank-input cause not yet confirmed; CI/NAS retest pending.
+
+NAS 9d03a2b: values visible but edits/import click not visibly effective. Follow-up preserves row object identity across polling, separates polling from user action busy guard, uses native Blazor input binding, adds interactive-ready indicator and safe action/transport diagnostics. Root cause not proven; verify circuit and NAS actions after deployment.
+
+NAS 985dea4: interactive circuit indicator active, other pages work, correct image confirmed, but updates actions produce no logs. Found missing Microsoft.AspNetCore.Components.Web namespace on Updates.razor (present on working Home/Vod pages); event directive discovery requires this import. Added it and restricted polling to status updates without overwriting drafts. NAS verification pending.
+
+## Afsluitende acceptatie werkblok 3 — 26 november 2026
+NAS 3e1df2b: gebruiker bevestigt dat intervalwijziging en handmatige importfeedback nu werken na toevoeging van Blazor Web namespace. Increment 1 en 2 eerder functioneel geaccepteerd; increment 3 beheer geaccepteerd. Afsluitende wijziging: gefilterde snelkoppelingen naar nieuwe providergroepen, kanaalbronnen, logische beschikbaarheid, film-/seriecategorieën en titels; importhistorie herladen bij gedetecteerde voltooiing. Regressiechecks voor planning, actieve importdeduplicatie, baseline, toevoeging/verwijdering, terugkeer, filter, rollback en foutregistratie. Automatische uitvoering en echte providerwijzigingen over langere tijd nog niet afzonderlijk bevestigd; geen gefingeerde NAS-acceptatie. SuperTV serie niet afzonderlijk bevestigd, Arvio niet gevalideerd; geen afleveringhistorie of handmatige eigen-groepshistorie. PR #8 blijft open, merge alleen na expliciet akkoord. #4 is volgende werkblok; #7 bestaande live-verfijningen.

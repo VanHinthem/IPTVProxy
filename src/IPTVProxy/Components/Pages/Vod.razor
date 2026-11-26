@@ -1,0 +1,173 @@
+@page "/vod"
+@using IPTVProxy.Data
+@using IPTVProxy.Providers
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Web
+@inject ILogger<Vod> Log
+@inject VodCatalog Catalog
+@inject VodPublication Publication
+@inject IDbContextFactory<CatalogDb> Factory
+<PageTitle>Films en series</PageTitle>
+<h1>Films en series</h1>
+<p><a href="/">Providers</a> · <a href="/groups">Live TV-groepen</a> · <a href="/updates">Nieuwe titels en importhistorie</a></p>
+@foreach(var p in providers)
+{
+    <p>@p.Name <button disabled="@busy" @onclick='()=>Import(p.Id,"movie")'>Films importeren</button> <button disabled="@busy" @onclick='()=>Import(p.Id,"series")'>Series importeren</button></p>
+}
+<p role="status">@status</p>
+<button disabled="@busy" @onclick='()=>ChangeKind("movie")'>Films</button>
+<button disabled="@busy" @onclick='()=>ChangeKind("series")'>Series</button>
+<h2>@(kind=="movie"?"Films":"Series")</h2>
+<p><a href="@($"/updates?kind={kind}&entity=category&action=added#changes")">Nieuwe providercategorieën</a> · <a href="@($"/updates?kind={kind}&entity=title&action=added#changes")">Nieuwe titels per provider</a></p>
+<p>@categories.Where(c=>c.Kind==kind).Sum(c=>c.Count).ToString("N0") geïmporteerd · @published.Sum(c=>c.Count).ToString("N0") gepubliceerd · @published.Count categorieën</p>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1.5rem">
+<section>
+<h3>Publicatievolgorde</h3>
+<p>Sleep categorieën of gebruik de pijlen.</p>
+<table style="width:100%;text-align:left"><thead><tr><th>Categorie</th><th>Aantal</th><th>Volgorde</th></tr></thead><tbody>
+@foreach(var c in published)
+{
+    <tr @key="c.Id" draggable="true" @ondragstart="()=>dragId=c.Id" @ondragover:preventDefault="true" @ondrop="()=>Drop(c.Id)">
+        <td>☰ @c.Name</td><td>@c.Count</td><td><button disabled="@(busy||published.First().Id==c.Id)" @onclick="()=>Move(c.Id,-1)">↑</button><button disabled="@(busy||published.Last().Id==c.Id)" @onclick="()=>Move(c.Id,1)">↓</button></td>
+    </tr>
+}
+</tbody></table>
+<h3>Eigen categorieën</h3>
+<button disabled="@busy" @onclick="NewGroup">Nieuwe categorie</button>
+@foreach(var g in groups)
+{
+    <p>@g.Name (@g.Sources.Length bronnen, @(g.Enabled?"aan":"uit")) <button disabled="@busy" @onclick="()=>Edit(g)">Bewerken</button></p>
+}
+@if(editing)
+{
+    <fieldset disabled="@busy">
+    <legend>@(editId==0?"Nieuwe categorie":"Categorie bewerken")</legend>
+    <label>Naam <input @bind="editName" maxlength="200" /></label>
+    <label><input type="checkbox" @bind="editEnabled" /> Publiceren</label>
+    <p>Selecteer broncategorieën rechts. Een gekoppelde bron wordt uitsluitend onder deze eigen categorie gepubliceerd.</p>
+    <p>@editSources.Count bronnen geselecteerd</p>
+    @foreach(var source in editSources.ToArray())
+    {
+        <div>@SourceName(source) <button @onclick="()=>editSources.Remove(source)">×</button></div>
+    }
+    <button @onclick="SaveGroup">Opslaan</button> <button @onclick="CancelEdit">Annuleren</button>
+    @if(editId!=0)
+    {
+        <label><input type="checkbox" @bind="confirmDelete" /> Verwijderen bevestigen</label>
+        <button disabled="@(!confirmDelete)" @onclick="DeleteGroup">Verwijderen</button>
+    }
+    </fieldset>
+}
+</section>
+<section>
+<h3>Providercategorieën</h3>
+<input placeholder="Zoek categorie" @bind="search" @bind:event="oninput" />
+<select @bind="providerFilter"><option value="">Alle providers</option>@foreach(var p in providers){<option value="@p.Name">@p.Name</option>}</select>
+<select @bind="selectionFilter"><option value="">Alle categorieën</option><option value="published">Gepubliceerd</option><option value="hidden">Niet gepubliceerd</option><option value="assigned">Gekoppeld</option></select>
+<p>@Filtered.Count() categorieën</p>
+@if(editing)
+{
+    <button disabled="@busy" @onclick="()=>BulkEdit(true)">Zichtbare bronnen toevoegen</button>
+    <button disabled="@busy" @onclick="()=>BulkEdit(false)">Zichtbare bronnen loskoppelen</button>
+}
+else
+{
+    <button disabled="@busy" @onclick="()=>BulkSelect(true)">Zichtbare publiceren</button>
+    <button disabled="@busy" @onclick="()=>BulkSelect(false)">Zichtbare verbergen</button>
+}
+<div style="max-height:650px;overflow:auto">
+<table style="width:100%;text-align:left"><thead><tr><th>Provider / categorie</th><th>Aantal</th><th>@(editing?"Koppelen":"Publiceren")</th></tr></thead><tbody>
+@foreach(var c in Filtered)
+{
+    var owner=Owner(c.Id);
+    <tr @key="c.Id"><td><small>@c.Provider</small><br/>@c.Name @if(owner is not null){<small>→ @owner.Name</small>}</td><td>@c.Count</td><td>
+    @if(editing)
+    {
+        <input type="checkbox" checked="@editSources.Contains(c.Id)" disabled="@(busy||(owner is not null&&owner.Id!=editId))" @onchange="e=>ToggleSource(c.Id,e.Value is true)" />
+    }
+    else
+    {
+        <input type="checkbox" checked="@(owner?.Enabled??c.Selected)" disabled="@(busy||owner is not null)" @onchange="e=>Select(c.Id,e.Value is true)" />
+    }
+    </td></tr>
+}
+</tbody></table></div>
+</section>
+</div>
+<h3>Titels zoeken</h3>
+<p>Zoek onafhankelijk van het categoriebeheer in de volledige geïmporteerde catalogus.</p>
+<select aria-label="Contenttype" @bind="titleKind" @bind:after="RefreshSearch"><option value="">Films en series</option><option value="movie">Films</option><option value="series">Series</option></select>
+<input placeholder="Film of serie" @bind="titleSearch" @bind:event="oninput" @bind:after="DebounceSearch" />
+<label><input type="checkbox" @bind="onlyPublished" @bind:after="RefreshSearch" /> Alleen gepubliceerd</label>
+<button disabled="@busy" @onclick="()=>SearchTitles(0)">Zoeken</button>
+<p role="status">@searchStatus</p>
+<table style="width:100%;text-align:left"><thead><tr><th>Titel</th><th>Type</th><th>Provider</th><th>Categorie</th><th>Publicatie</th></tr></thead><tbody>
+@foreach(var t in titles.Take(50)){<tr><td>@t.Name</td><td>@(t.Kind=="movie"?"Film":"Serie")</td><td>@t.Provider</td><td>@t.Category</td><td>@(t.Published?"Ja":"Nee")</td></tr>}
+</tbody></table>
+<button disabled="@(busy||titlePage==0)" @onclick="()=>SearchTitles(titlePage-1)">Vorige</button>
+<button disabled="@(busy||titles.Count<=50)" @onclick="()=>SearchTitles(titlePage+1)">Volgende</button>
+@code {
+    private List<Provider> providers=new();
+    private List<VodCatalog.Category> categories=new();
+    private List<VodPublication.Group> groups=new();
+    private List<VodPublication.Published> published=new();
+    private List<VodPublication.Title> titles=new();
+    private string kind="movie",search="",status="",providerFilter="",selectionFilter="",editName="",titleSearch="",titleKind="";
+    private bool busy,editing,editEnabled=true,confirmDelete,onlyPublished;
+    private int editId,dragId,titlePage,searchRevision;
+    private string searchStatus="Vul minimaal twee tekens in.";
+    private HashSet<int> editSources=new();
+    private CancellationToken Ct=>CancellationToken.None;
+    private VodPublication.Group? Owner(int id)=>groups.FirstOrDefault(g=>g.Sources.Contains(id));
+    private IEnumerable<VodCatalog.Category> Filtered=>categories.Where(c=>c.Kind==kind&&(providerFilter==""||c.Provider==providerFilter)&&(c.Name+" "+c.Provider).Contains(search,StringComparison.OrdinalIgnoreCase)).Where(c=>selectionFilter switch{"published"=>Owner(c.Id)?.Enabled??c.Selected,"hidden"=>!(Owner(c.Id)?.Enabled??c.Selected),"assigned"=>Owner(c.Id)!=null,_=>true});
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        providers=await db.Providers.AsNoTracking().Where(p=>p.Enabled).OrderBy(p=>p.Priority).ToListAsync();
+        await Refresh();
+    }
+    private async Task Refresh(){categories=await Catalog.Categories(Ct);groups=await Publication.Groups(kind,Ct);published=await Publication.List(kind,Ct);}
+    private async Task ChangeKind(string value){if(busy)return;kind=value;CancelEdit();await Refresh();}
+    private async Task Run(Func<Task> action)
+    {if(busy)return;busy=true;try{await action();await Refresh();}catch(ArgumentException ex){status=ex.Message;}catch{status="Actie mislukt; bestaande gegevens behouden.";}finally{busy=false;}}
+    private Task Import(int id,string type)=>Run(async()=>{status="Import bezig...";var n=await Catalog.ImportAsync(id,type,Ct);status=$"Import geslaagd: {n} items.";});
+    private Task Select(int id,bool value)=>Run(()=>Publication.SelectMany(new[]{id},value,Ct));
+    private Task BulkSelect(bool value)=>Run(()=>Publication.SelectMany(Filtered.Where(c=>Owner(c.Id)==null).Select(c=>c.Id).ToArray(),value,Ct));
+    private void NewGroup(){editing=true;editId=0;editName="";editEnabled=true;editSources.Clear();confirmDelete=false;}
+    private void Edit(VodPublication.Group g){editing=true;editId=g.Id;editName=g.Name;editEnabled=g.Enabled;editSources=g.Sources.ToHashSet();confirmDelete=false;}
+    private void CancelEdit(){editing=false;editSources.Clear();confirmDelete=false;}
+    private string SourceName(int id)=>categories.FirstOrDefault(c=>c.Id==id) is {} c?c.Provider+" / "+c.Name:$"Bron {id} (niet actief)";
+    private void ToggleSource(int id,bool value){if(value)editSources.Add(id);else editSources.Remove(id);}
+    private void BulkEdit(bool value){foreach(var c in Filtered.Where(c=>Owner(c.Id)==null||Owner(c.Id)?.Id==editId))ToggleSource(c.Id,value);}
+    private Task SaveGroup()=>Run(async()=>{await Publication.Save(editId,kind,editName,editEnabled,editSources,Ct);CancelEdit();status="Categorie opgeslagen.";});
+    private Task DeleteGroup()=>Run(async()=>{if(!confirmDelete)return;await Publication.Delete(editId,Ct);CancelEdit();status="Categorie verwijderd; oorspronkelijke selecties hersteld.";});
+    private Task Move(int id,int delta){var ids=published.Select(c=>c.Id).ToList();var from=ids.IndexOf(id);var to=from+delta;return Reorder(ids,from,to);}
+    private Task Drop(int target){var ids=published.Select(c=>c.Id).ToList();return Reorder(ids,ids.IndexOf(dragId),ids.IndexOf(target));}
+    private Task Reorder(List<int> ids,int from,int to){if(from<0||to<0||to>=ids.Count||from==to)return Task.CompletedTask;var id=ids[from];ids.RemoveAt(from);ids.Insert(to,id);return Run(()=>Publication.Reorder(kind,ids.ToArray(),Ct));}
+    private async Task DebounceSearch()
+    {
+        var revision=++searchRevision;
+        await Task.Delay(350);
+        if(revision==searchRevision)await SearchTitles(0);
+    }
+    private Task RefreshSearch()=>SearchTitles(0);
+    private async Task SearchTitles(int page)
+    {
+        var revision=++searchRevision;var term=titleSearch.Trim();
+        if(term.Length<2){titles.Clear();titlePage=0;searchStatus="Vul minimaal twee tekens in.";return;}
+        searchStatus="Zoeken...";
+        try
+        {
+            var result=await Publication.Search(titleKind,term,onlyPublished,Math.Max(0,page)*50,Ct);
+            if(revision!=searchRevision)return;
+            titles=result;titlePage=Math.Max(0,page);
+            searchStatus=result.Count==0?"Geen titels gevonden.":$"Resultaten {titlePage*50+1}–{titlePage*50+Math.Min(50,result.Count)}"+(result.Count>50?" (meer beschikbaar)":"");
+        }
+        catch(Exception ex)
+        {
+            if(revision!=searchRevision)return;
+            titles.Clear();searchStatus="Zoeken mislukt. Probeer opnieuw.";
+            Log.LogWarning("VOD title search failed: {ErrorType}",ex.GetType().Name);
+        }
+    }
+}

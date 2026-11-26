@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IPTVProxy.Providers;
 
-public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, LocalAccounts accounts, ILogger<LivePlayback> log, IConfiguration config)
+public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, LocalAccounts accounts, ILogger<LivePlayback> log, IConfiguration config, ProviderConnectionCoordinator capacity)
 {
     private readonly object gate = new();
     private readonly Dictionary<int, Session> sessions = new();
@@ -16,6 +16,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         public CancellationTokenSource Stop { get; } = new();
         public CancellationToken StopToken { get; }
         public int Subscribers { get; set; }
+        public IDisposable? Lease { get; set; }
         public SharedStreamBuffer Buffer { get; } = new(32 * 1024 * 1024 / 188 * 188);
         public bool Closing { get; set; }
         public TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -98,7 +99,9 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                     var occupied = sessions.Values.Where(s => s.ProviderId == provider.Id).ToArray();
                     if (occupied.Length < provider.ConnectionLimit)
                     {
-                        session = new Session(id, provider.Id);
+                        var lease=capacity.TryReserve(provider.Id,provider.ConnectionLimit);
+                        if(lease is null){ctx.Response.StatusCode=503;return;}
+                        session = new Session(id, provider.Id){Lease=lease};
                         sessions.Add(id, session);
                         session.Subscribers++;
                         start = true;
@@ -232,6 +235,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 session.Closing = true;
                 session.Buffer.Complete();
                 sessions.Remove(session.Id);
+                session.Lease?.Dispose();
                 if (session.Subscribers == 0) session.Stop.Dispose();
                 session.Released.TrySetResult();
             }

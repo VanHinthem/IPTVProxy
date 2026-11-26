@@ -39,3 +39,7 @@ jobs:
           curl -fsS --get --data-urlencode username=viewer --data-urlencode "password=$viewer" http://127.0.0.1:8080/player_api.php | jq -e '.user_info.auth == 1'
           curl -fsS --get --data-urlencode username=viewer --data-urlencode "password=$viewer" --data-urlencode action=get_live_streams http://127.0.0.1:8080/player_api.php | jq -e '. == []'
           test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/live/viewer/$viewer/1.ts")" = 404
+
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/movie/viewer/$viewer/1.mp4")" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/series/viewer/$viewer/1")" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/movie/viewer/wrong/1.mp4")" = 401

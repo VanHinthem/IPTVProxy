@@ -1,0 +1,104 @@
+@page "/updates"
+@using IPTVProxy.Providers
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Web
+@using System.Globalization
+@implements IDisposable
+@inject ILogger<Updates> Log
+@inject CatalogHistory History
+@inject LiveCatalog Live
+@inject VodCatalog Vod
+<PageTitle>Cataloguswijzigingen</PageTitle>
+<h1>Cataloguswijzigingen en imports</h1>
+<p><a href="/">Providers</a> · <a href="/vod">Films en series</a> · <a href="/groups">Live TV-groepen</a></p>
+<p>Wijzigingen worden bijgehouden vanaf deze versie. Bestaande catalogusitems hebben geen bekende eerste toevoegingsdatum.</p>
+<button disabled="@busy" @onclick="Refresh">Vernieuwen</button>
+<p role="status">@status</p>
+<p class="muted">@(interactive?"Beheerverbinding actief":"Beheerverbinding wordt gestart…")</p>
+<h2>Importplanning per provider</h2>
+<table style="width:100%;text-align:left"><thead><tr><th>Provider</th><th>Type</th><th>Interval (uur)</th><th>Laatste succes</th><th>Laatste poging</th><th>Volgende poging</th><th>Importstatus</th><th>Actie</th></tr></thead><tbody>
+@foreach(var row in states)
+{
+    <tr @key="(row.State.ProviderId,row.State.Kind)">
+    <td>@row.State.Provider</td><td>@Type(row.State.Kind)</td>
+    <td><input type="number" min="0" max="168" style="width:5rem" @bind="row.Draft" @bind:event="oninput" @bind:after="()=>ValidateDraft(row)" /><button disabled="@(busy||!row.Valid)" @onclick="()=>Save(row)">Opslaan</button></td>
+    <td>@Date(row.State.LastSuccess)</td><td>@Date(row.State.LastAttempt) @(row.State.Success==false?"(mislukt)":row.State.Success==true?"(geslaagd)":"")</td>
+    <td>@(Running(row.State) is not null?"Na afronding":row.State.Hours==0?"Uit":Date(CatalogHistory.Next(row.State,CatalogHistory.Now())))</td>
+    <td>@if(Running(row.State) is long since){<strong style="color:#1769aa">Import bezig / in wachtrij</strong><br/><small>@TimeSpan.FromSeconds(Math.Max(0,CatalogHistory.Now()-since)).ToString("c")</small>}else{<span>@(row.State.Success==false?"Mislukt":row.State.Success==true?"Gereed":"Nog niet geïmporteerd")</span>}</td>
+    <td><button disabled="@(busy||Running(row.State)!=null)" @onclick="()=>Import(row.State)">@(Running(row.State)!=null?"Bezig…":"Nu importeren")</button></td></tr>
+}
+</tbody></table>
+<p>0 = automatische import uit. Bij mislukking blijft de vorige catalogus beschikbaar.</p>
+<h2 id="changes">Nieuwe en verdwenen items</h2>
+<select @bind="provider" @bind:after="Filter"><option value="0">Alle providers</option>@foreach(var p in states.Select(s=>(s.State.ProviderId,s.State.Provider)).Distinct()){<option value="@p.ProviderId">@p.Provider</option>}</select>
+<select @bind="kind" @bind:after="Filter"><option value="">Alle typen</option><option value="live">Live TV</option><option value="movie">Films</option><option value="series">Series</option></select>
+<select @bind="entity" @bind:after="Filter"><option value="">Alle items</option><option value="category">Providercategorieën</option><option value="channel">Kanaalbronnen</option><option value="logical">Logische kanalen</option><option value="title">Films/series</option></select>
+<select @bind="action" @bind:after="Filter"><option value="">Alle wijzigingen</option><option value="added">Nieuw toegevoegd</option><option value="returned">Teruggekeerd</option><option value="available">Logisch beschikbaar</option><option value="removed">Verdwenen</option></select>
+<input placeholder="Zoek naam of categorie" @bind="search" /><button disabled="@busy" @onclick="Filter">Zoeken</button>
+<p>@(changes.Count==0?"Geen wijzigingen gevonden.":$"Resultaten {page*100+1}–{page*100+Math.Min(changes.Count,100)}")</p>
+<table style="width:100%;text-align:left"><thead><tr><th>Datum</th><th>Provider</th><th>Type</th><th>Item</th><th>Naam</th><th>Categorie</th><th>Wijziging</th></tr></thead><tbody>
+@foreach(var c in changes.Take(100)){<tr><td>@Date(c.Observed)</td><td>@c.Provider</td><td>@Type(c.Kind)</td><td>@Entity(c.Entity)</td><td>@c.Name</td><td>@c.Category</td><td>@Action(c.Action)</td></tr>}
+</tbody></table>
+<button disabled="@(busy||page==0)" @onclick="()=>ChangePage(page-1)">Vorige</button>
+<button disabled="@(busy||changes.Count<=100)" @onclick="()=>ChangePage(page+1)">Volgende</button>
+<h2>Importhistorie</h2>
+<p>De provider- en typefilters gelden ook voor dit overzicht.</p>
+<table style="width:100%;text-align:left"><thead><tr><th>Datum</th><th>Provider</th><th>Type</th><th>Duur</th><th>Items</th><th>Categorieën</th><th>Nieuw</th><th>Verdwenen</th><th>Status</th></tr></thead><tbody>
+@foreach(var r in runs.Take(50)){<tr><td>@Date(r.Finished)</td><td>@r.Provider</td><td>@Type(r.Kind)</td><td>@(r.Finished-r.Started)s</td><td>@r.Count</td><td>@r.Categories</td><td>@r.Added</td><td>@r.Removed</td><td>@(r.Success?"Geslaagd":r.Error)</td></tr>}
+</tbody></table>
+<button disabled="@(busy||runPage==0)" @onclick="()=>RunPage(runPage-1)">Vorige</button>
+<button disabled="@(busy||runs.Count<=50)" @onclick="()=>RunPage(runPage+1)">Volgende</button>
+@code {
+    private sealed class Row(CatalogHistory.State state){public CatalogHistory.State State{get;set;}=state;public int Hours{get;set;}=state.Hours;public string Draft{get;set;}=state.Hours.ToString(CultureInfo.InvariantCulture);public bool Dirty{get;set;} public bool Valid{get;set;}=true;}
+    private List<Row> states=[];
+    private List<CatalogHistory.Change> changes=[];
+    private List<CatalogHistory.Run> runs=[];
+    private int provider,page,runPage;
+    private string kind="",entity="",action="",search="",status="";
+    private bool busy,interactive,pollingNow;
+    private readonly CancellationTokenSource polling=new();
+    private static readonly TimeZoneInfo LocalZone=TimeZoneInfo.FindSystemTimeZoneById("Europe/Amsterdam");
+    private long? Running(CatalogHistory.State s)=>History.RunningSince(s.ProviderId,s.Kind);
+    private static void ValidateDraft(Row row){row.Dirty=true;row.Valid=int.TryParse(row.Draft,NumberStyles.None,CultureInfo.InvariantCulture,out var hours)&&hours>=0&&hours<=168;if(row.Valid)row.Hours=hours;}
+    protected override Task OnAfterRenderAsync(bool firstRender){if(firstRender){interactive=true;StateHasChanged();_=Poll(polling.Token);}return Task.CompletedTask;}
+    private async Task Poll(CancellationToken ct){using var timer=new PeriodicTimer(TimeSpan.FromSeconds(3));try{while(await timer.WaitForNextTickAsync(ct)){await InvokeAsync(async()=>{if(!busy&&!pollingNow){pollingNow=true;try{var before=states.Select(r=>(r.State.ProviderId,r.State.Kind,r.State.LastAttempt,r.State.Success)).ToArray();await LoadStates(true);if(!busy&&!before.SequenceEqual(states.Select(r=>(r.State.ProviderId,r.State.Kind,r.State.LastAttempt,r.State.Success))))await LoadResults();}finally{pollingNow=false;}}StateHasChanged();});}}catch(OperationCanceledException) when(ct.IsCancellationRequested){}catch(Exception ex){Log.LogWarning("Updates polling failed: {ErrorType}",ex.GetType().Name);}}
+    public void Dispose(){polling.Cancel();polling.Dispose();}
+    private CancellationToken Ct=>CancellationToken.None;
+    private static string Date(long? value)=>value is long v?TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(v),LocalZone).ToString("dd-MM-yyyy HH:mm"):"—";
+    private static string Type(string kind)=>kind switch{"live"=>"Live TV","movie"=>"Films","series"=>"Series",_=>kind};
+    private static string Entity(string value)=>value switch{"category"=>"Categorie","channel"=>"Kanaalbron","logical"=>"Logisch kanaal","title"=>"Titel",_=>value};
+    private static string Action(string value)=>value switch{"added"=>"Nieuw","returned"=>"Teruggekeerd","removed"=>"Verdwenen","available"=>"Beschikbaar",_=>value};
+    [SupplyParameterFromQuery(Name="kind")] public string? InitialKind{get;set;}
+    [SupplyParameterFromQuery(Name="entity")] public string? InitialEntity{get;set;}
+    [SupplyParameterFromQuery(Name="action")] public string? InitialAction{get;set;}
+    protected override async Task OnParametersSetAsync()
+    {
+        kind=InitialKind is "live" or "movie" or "series"?InitialKind:"";
+        entity=InitialEntity is "category" or "channel" or "logical" or "title"?InitialEntity:"";
+        action=InitialAction is "added" or "returned" or "removed" or "available"?InitialAction:"";
+        page=runPage=0;await Refresh();
+    }
+    private async Task Run(Func<Task> task){if(busy)return;busy=true;try{await task();}catch(Exception ex){Log.LogWarning("Updates action failed: {ErrorType}",ex.GetType().Name);status="Actie mislukt. Vernieuw het overzicht of controleer de importhistorie.";}finally{busy=false;}}
+    private async Task LoadStates(bool statusOnly=false)
+    {
+        var fresh=await History.States(Ct);
+        if(statusOnly&&busy)return;
+        var next=new List<Row>();
+        foreach(var s in fresh)
+        {
+            var row=states.FirstOrDefault(x=>x.State.ProviderId==s.ProviderId&&x.State.Kind==s.Kind);
+            if(row is null)row=new Row(s);
+            else{row.State=s;if(!statusOnly&&!row.Dirty){row.Hours=s.Hours;row.Draft=s.Hours.ToString(CultureInfo.InvariantCulture);row.Valid=true;}}
+            next.Add(row);
+        }
+        states=next;
+    }
+    private async Task Load(){await LoadStates();await LoadResults();}
+    private async Task LoadResults(){changes=await History.Changes(provider,kind,entity,action,search,page*100,Ct);runs=await History.Runs(provider,kind,runPage*50,Ct);}
+    private Task Refresh()=>Run(Load);
+    private Task Filter()=>Run(async()=>{page=runPage=0;await LoadResults();});
+    private Task ChangePage(int value)=>Run(async()=>{page=Math.Max(0,value);await LoadResults();});
+    private Task RunPage(int value)=>Run(async()=>{runPage=Math.Max(0,value);await LoadResults();});
+    private Task Save(Row row)=>Run(async()=>{ValidateDraft(row);if(!row.Valid){status="Ongeldig interval.";return;}Log.LogInformation("Catalog schedule save requested: provider {ProviderId}, {Kind}, hours {Hours}",row.State.ProviderId,row.State.Kind,row.Hours);await History.SetHours(row.State.ProviderId,row.State.Kind,row.Hours,Ct);row.Dirty=false;status="Interval opgeslagen.";await Load();});
+    private Task Import(CatalogHistory.State s)=>Run(async()=>{Log.LogInformation("Manual catalog import requested: provider {ProviderId}, {Kind}",s.ProviderId,s.Kind);status=$"Import bezig: {s.Provider} / {Type(s.Kind)}";StateHasChanged();await Task.Yield();try{if(s.Kind=="live")await Live.ImportAsync(s.ProviderId,Ct);else await Vod.ImportAsync(s.ProviderId,s.Kind,Ct);status="Import geslaagd.";}catch{status="Import mislukt; bestaande gegevens behouden.";}await Load();});
+}

@@ -1,7 +1,7 @@
 name: Development image
 on:
   push:
-    branches: [main, feature/mvp-1-live-tv, feature/mvp-2-channel-management]
+    branches: [main, feature/mvp-1-live-tv, feature/mvp-2-channel-management, feature/mvp-3-vod]
   workflow_dispatch:
 permissions:
   contents: read
