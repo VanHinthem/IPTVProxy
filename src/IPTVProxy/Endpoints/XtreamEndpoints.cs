@@ -11,6 +11,8 @@ public static class XtreamEndpoints
     {
         app.MapGet("/artwork/{kind}/{id:int}/{signature}", ChannelArtwork).RequireRateLimiting("artwork");
         app.MapGet("/artwork/programme/{token}", ProgrammeArtwork).RequireRateLimiting("artwork");
+        app.MapMethods("/movie/{username}/{password}/{id:int}.{extension}", ["GET","HEAD"], (HttpContext ctx,string username,string password,int id,string extension,VodPlayback playback)=>playback.Play(ctx,username,password,id,"movie",extension)).RequireRateLimiting("xtream");
+        app.MapMethods("/series/{username}/{password}/{id:int}.{extension}", ["GET","HEAD"], (HttpContext ctx,string username,string password,int id,string extension,VodPlayback playback)=>playback.Play(ctx,username,password,id,"series",extension)).RequireRateLimiting("xtream");
         app.MapGet("/xmltv.php", XmlTv).RequireRateLimiting("xtream");
         app.MapGet("/player_api.php", Api).RequireRateLimiting("xtream");
         app.MapGet("/live/{username}/{password}/{id:int}.ts", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");
@@ -39,7 +41,7 @@ public static class XtreamEndpoints
         if(file is null)return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         return Results.File(file,"application/xml; charset=utf-8",enableRangeProcessing:false);
     }
-    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork)
+    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork, VodCatalog vod)
     {
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
@@ -106,8 +108,18 @@ public static class XtreamEndpoints
                     epg_channel_id = "iptvproxy.raw." + x.s.Id, category_id = x.c.Id.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
                 }).ToListAsync(ct)).Select(x=>new {x.num,x.name,x.stream_type,x.stream_id,stream_icon=artwork.ChannelUrl(x.stream_id,true),x.epg_channel_id,x.category_id,x.tv_archive,x.tv_archive_duration,x.direct_source}));
-            case "get_vod_categories": case "get_vod_streams": case "get_series_categories": case "get_series":
-                return Results.Json(Array.Empty<object>());
+            case "get_vod_categories": case "get_series_categories":
+                var kind=q["action"]=="get_vod_categories"?"movie":"series";
+                return Results.Json((await vod.Categories(ct)).Where(c=>c.Selected&&c.Kind==kind).Select(c=>new {category_id=c.Id.ToString(),category_name=c.Name,parent_id=0}));
+            case "get_vod_streams": case "get_series":
+                int? categoryId=null;
+                if(!string.IsNullOrEmpty(q["category_id"])&&q["category_id"]!="0"){if(!int.TryParse(q["category_id"],out var cid)||cid<1)return Results.BadRequest();categoryId=cid;}
+                return Results.Json(await vod.List(q["action"]=="get_vod_streams"?"movie":"series",categoryId,ct));
+            case "get_vod_info": case "get_series_info":
+                var movie=q["action"]=="get_vod_info";
+                if(!int.TryParse(q[movie?"vod_id":"series_id"],out var vodId))return Results.BadRequest();
+                try{var detail=await vod.Detail(vodId,movie?"movie":"series",ct);return detail is null?Results.NotFound():Results.Json(detail);}
+                catch(Exception) when(!ct.IsCancellationRequested){return Results.StatusCode(502);}
             case "get_short_epg": case "get_simple_data_table":
                 if(!int.TryParse(q["stream_id"],out var requested))return Results.Json(new {epg_listings=Array.Empty<object>()});
                 var limit=int.TryParse(q["limit"],out var count)?Math.Clamp(count,1,100):q["action"]=="get_simple_data_table"?100:10;

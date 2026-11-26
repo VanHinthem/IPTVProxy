@@ -1,0 +1,46 @@
+@page "/vod"
+@using IPTVProxy.Data
+@using IPTVProxy.Providers
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Web
+@inject VodCatalog Catalog
+@inject IDbContextFactory<CatalogDb> Factory
+<PageTitle>Films en series</PageTitle>
+<h1>Films en series</h1>
+<p><a href="/">Providers</a></p>
+<p>Importeer alle films en series. Selecteer alleen categorieën die zichtbaar moeten zijn in de IPTV-app.</p>
+@foreach(var p in providers)
+{
+    <p>@p.Name <button disabled="@busy" @onclick='()=>Import(p.Id,"movie")'>Films importeren</button> <button disabled="@busy" @onclick='()=>Import(p.Id,"series")'>Series importeren</button></p>
+}
+<p role="status">@status</p>
+<button @onclick='()=>kind="movie"'>Films</button> <button @onclick='()=>kind="series"'>Series</button>
+<input placeholder="Zoek categorie of provider" @bind="search" @bind:event="oninput" />
+<table><thead><tr><th>Provider</th><th>Categorie</th><th>Aantal</th><th>Publiceren</th></tr></thead><tbody>
+@foreach(var c in categories.Where(c=>c.Kind==kind&&(c.Name+" "+c.Provider).Contains(search,StringComparison.OrdinalIgnoreCase)))
+{
+    <tr><td>@c.Provider</td><td>@c.Name</td><td>@c.Count</td><td><input type="checkbox" checked="@c.Selected" disabled="@busy" @onchange="e=>Select(c.Id,e.Value is true)" /></td></tr>
+}
+</tbody></table>
+@code {
+    private List<Provider> providers=new();
+    private List<VodCatalog.Category> categories=new();
+    private string kind="movie",search="",status="";
+    private bool busy;
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db=await Factory.CreateDbContextAsync();
+        providers=await db.Providers.AsNoTracking().Where(p=>p.Enabled).OrderBy(p=>p.Priority).ToListAsync();
+        await Refresh();
+    }
+    private async Task Refresh()=>categories=await Catalog.Categories(CancellationToken.None);
+    private async Task Import(int id,string type)
+    {
+        if(busy)return;busy=true;status="Import bezig...";
+        try{var count=await Catalog.ImportAsync(id,type,CancellationToken.None);status=$"Import geslaagd: {count} items.";await Refresh();}
+        catch{status="Import mislukt of afgewezen. Vorige catalogus behouden.";}
+        finally{busy=false;}
+    }
+    private async Task Select(int id,bool value)
+    {try{await Catalog.Select(id,value,CancellationToken.None);await Refresh();}catch{status="Selectie opslaan mislukt.";}}
+}
