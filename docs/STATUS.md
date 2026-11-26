@@ -48,3 +48,9 @@ Featurebranch: volledige handmatige film/serie-import, standaard niet gepublicee
 NAS initial VOD: films, posters and descriptions visible; movie and episode playback retry without error. Added sanitized request/route/capacity/upstream diagnostics, extensionless routes and movie_data.id compatibility. Actual cause not yet established. CI/NAS retest pending.
 
 NAS 0f8ab46: movie upstream HTTP 200 and first bytes confirmed; concurrent Range requests rejected by local provider limit 1. Added opt-in via existing single-viewer switch setting, same-asset VOD request replacement with cancellation and wait for upstream release; never evicts live or increases capacity. Sequential handoff may not suffice for clients requiring truly parallel ranges. CI and real playback/seek pending.
+
+## Werkblok 3 — increment 1 NAS-acceptatie (26 november 2026)
+NAS 135f8e2: SuperTV filmplayback, beeld/geluid en seek; Strong8K film- en serieplayback; Live TV bevestigd. Posters, beschrijvingen, catalogus en selectie eerder bevestigd. Geen extra videocache nodig. SuperTV serie niet afzonderlijk bevestigd; multi-user en echte parallelle ranges blijven #4.
+
+## Increment 2
+Eigen VOD-categorieën met broncategorieën uit beide providers, hernoemen, aan/uit, verwijderen, zoek/bulkselectie, publicatievolgorde en titelzoeker. Eén broncategorie kan aan maximaal één eigen categorie gekoppeld zijn; deze vervangt dan originele publicatie. Bestaande selectievlaggen blijven bewaard en worden weer actief na loskoppelen. Film/serie/episode-ID's blijven ongewijzigd; custom category IDs gebruiken apart positief bereik. Geen wijzigingen aan streaming. CI/NAS nog te valideren.

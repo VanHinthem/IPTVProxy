@@ -24,6 +24,7 @@ builder.Services.AddHostedService<CatalogRefresh>();
 builder.Services.AddSingleton<LivePlayback>();
 builder.Services.AddSingleton<ProviderConnectionCoordinator>();
 builder.Services.AddSingleton<VodCatalog>();
+builder.Services.AddSingleton<VodPublication>();
 builder.Services.AddSingleton<VodPlayback>();
 builder.Services.AddSingleton<VodRequestCoordinator>();
 builder.Services.AddSingleton<ProviderEpg>();

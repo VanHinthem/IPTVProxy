@@ -43,7 +43,7 @@ public static class XtreamEndpoints
         if(file is null)return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         return Results.File(file,"application/xml; charset=utf-8",enableRangeProcessing:false);
     }
-    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork, VodCatalog vod)
+    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork, VodCatalog vod, VodPublication publication)
     {
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
@@ -112,7 +112,7 @@ public static class XtreamEndpoints
                 }).ToListAsync(ct)).Select(x=>new {x.num,x.name,x.stream_type,x.stream_id,stream_icon=artwork.ChannelUrl(x.stream_id,true),x.epg_channel_id,x.category_id,x.tv_archive,x.tv_archive_duration,x.direct_source}));
             case "get_vod_categories": case "get_series_categories":
                 var kind=q["action"]=="get_vod_categories"?"movie":"series";
-                return Results.Json((await vod.Categories(ct)).Where(c=>c.Selected&&c.Kind==kind).Select(c=>new {category_id=c.Id.ToString(),category_name=c.Name,parent_id=0}));
+                return Results.Json((await publication.List(kind,ct)).Select(c=>new {category_id=c.Id.ToString(),category_name=c.Name,parent_id=0}));
             case "get_vod_streams": case "get_series":
                 int? categoryId=null;
                 if(!string.IsNullOrEmpty(q["category_id"])&&q["category_id"]!="0"){if(!int.TryParse(q["category_id"],out var cid)||cid<1)return Results.BadRequest();categoryId=cid;}

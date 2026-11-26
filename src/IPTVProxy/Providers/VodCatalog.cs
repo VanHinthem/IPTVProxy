@@ -126,11 +126,11 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
         await Exec((SqliteConnection)db.Database.GetDbConnection(),null,"UPDATE VodCategories SET Selected=$0 WHERE Id=$1",ct,selected,id);
     }
-    private const string Visible=" i.Active=1 AND c.Active=1 AND c.Selected=1 AND p.Enabled=1 ";
+    private const string Visible=VodPublication.Visible;
     public async Task<JsonArray> List(string kind,int? category,CancellationToken ct)
     {
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
-        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.Id,i.CategoryId,i.Name,i.Extension,i.Metadata FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId WHERE "+Visible+" AND i.Kind=$0 AND ($1=0 OR c.Id=$1) ORDER BY p.Priority,p.Id,c.SortOrder,i.SortOrder",kind,category??0);
+        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.Id,"+VodPublication.EffectiveId+",i.Name,i.Extension,i.Metadata FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" LEFT JOIN VodPublicationOrder o ON o.PublicId=("+VodPublication.EffectiveId+") AND o.Kind=i.Kind WHERE "+Visible+" AND i.Kind=$0 AND ($1=0 OR ("+VodPublication.EffectiveId+")=$1) ORDER BY o.SortOrder IS NULL,o.SortOrder,p.Priority,p.Id,c.SortOrder,i.SortOrder",kind,category??0);
         await using var reader=await cmd.ExecuteReaderAsync(ct);var result=new JsonArray();
         while(await reader.ReadAsync(ct))
         {
@@ -144,7 +144,7 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
     private async Task<(int Provider,long Source,string Extension,string Metadata)?> Find(int id,string kind,CancellationToken ct)
     {
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
-        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,i.SourceId,i.Extension,i.Metadata FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId WHERE "+Visible+" AND i.Id=$0 AND i.Kind=$1",id,kind);
+        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,i.SourceId,i.Extension,i.Metadata FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" WHERE "+Visible+" AND i.Id=$0 AND i.Kind=$1",id,kind);
         await using var r=await cmd.ExecuteReaderAsync(ct);return await r.ReadAsync(ct)?(r.GetInt32(0),r.GetInt64(1),r.GetString(2),r.GetString(3)):null;
     }
     public async Task<Media?> Resolve(int id,string kind,CancellationToken ct)
@@ -157,7 +157,7 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         }
         await db.Database.OpenConnectionAsync(ct);
         int provider;long source;string ext;
-        await using(var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,e.SourceId,e.Extension FROM VodEpisodes e JOIN VodItems i ON i.Id=e.ItemId JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId WHERE "+Visible+" AND e.Active=1 AND e.Id=$0",id))
+        await using(var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,e.SourceId,e.Extension FROM VodEpisodes e JOIN VodItems i ON i.Id=e.ItemId JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" WHERE "+Visible+" AND e.Active=1 AND e.Id=$0",id))
         await using(var r=await cmd.ExecuteReaderAsync(ct)){if(!await r.ReadAsync(ct))return null;provider=r.GetInt32(0);source=r.GetInt64(1);ext=r.GetString(2);}
         var pr=await db.Providers.AsNoTracking().SingleOrDefaultAsync(p=>p.Id==provider&&p.Enabled,ct);return pr is null?null:new(pr,source,ext);
     }
