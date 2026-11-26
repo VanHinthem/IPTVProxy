@@ -20,7 +20,7 @@
     <fieldset disabled="@busy">
         <legend>@(id==0?"Nieuwe gebruiker":"Gebruiker wijzigen")</legend>
         <label>Gebruikersnaam <input @bind="name" autocomplete="off" maxlength="128" /></label>
-        <label>Wachtwoord <input type="password" @bind="password" autocomplete="new-password" maxlength="512" /></label>
+        <label>Wachtwoord <input type="password" @bind="password" autocomplete="new-password" maxlength="512" placeholder="Minimaal 8 tekens" /></label>
         @if(id!=0){<small>Laat wachtwoord leeg om het huidige te behouden.</small>}
         <label>Standaardplaylist <select @bind="playlistId"><option value="0">Selecteer</option>@foreach(var p in playlists.Where(p=>p.Enabled)){<option value="@p.Id">@p.Name</option>}</select></label>
         <label>Max. streams <input type="number" min="1" max="64" @bind="limit" /></label>
