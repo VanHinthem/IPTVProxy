@@ -189,6 +189,21 @@ Check(nextVod is not null&&handoffSessions.Count(10)==1&&oldViewer.Token.IsCance
 using var releaseRange=nextVod!.Token.Register(nextVod.Dispose);
 using var rangeViewer=await handoffSessions.Acquire(10,1,"series",11,ct,true);
 Check(rangeViewer is not null&&handoffSessions.Count(10)==1,"VOD range handoff");
+var clientSessions=new ViewerSessions();
+using var clientA=await clientSessions.Acquire(42,1,"live",101,ct,true,"device-a");
+using var duplicateA=await clientSessions.Acquire(42,1,"live",101,ct,true,"device-a");
+Check(clientA is not null&&duplicateA is not null&&clientSessions.Count(42)==1,"new account supports duplicate live requests");
+using(var blocked=new CancellationTokenSource())
+{
+    var secondDevice=clientSessions.Acquire(42,1,"live",102,blocked.Token,true,"device-b");
+    Check(!secondDevice.IsCompleted&&!clientA!.Token.IsCancellationRequested,"different client cannot displace viewer");
+    blocked.Cancel();
+    Check(await secondDevice is null,"different client denied at account capacity");
+}
+using var releaseClientA=clientA!.Token.Register(clientA.Dispose);
+using var releaseDuplicateA=duplicateA!.Token.Register(duplicateA.Dispose);
+using var switched=await clientSessions.Acquire(42,1,"live",102,ct,true,"device-a");
+Check(switched is not null&&clientSessions.Count(42)==1,"same client can zap on new account");
 var network=new ClientNetwork(viewerConfig);
 var http=new DefaultHttpContext();
 http.Connection.RemoteIpAddress=IPAddress.Parse("192.168.50.4");
