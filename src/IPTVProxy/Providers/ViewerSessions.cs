@@ -67,10 +67,11 @@ public sealed class ViewerSessions
                 if(timeout.IsCancellationRequested)return null;
                 var owned=active.Values.Where(x=>x.AccountId==accountId).ToArray();
                 var matching=owned.Where(x=>x.SinglePlayer&&x.Client==client&&!x.Closing).ToArray();
-                var sameLive=allowHandoff&&kind=="live"&&matching.Count(x=>x.Kind==kind&&x.AssetId==assetId) is >0 and <2;
+                var liveMatches=allowHandoff&&kind=="live"?matching.Count(x=>x.Kind==kind&&x.AssetId==assetId):0;
+                var sameLive=liveMatches==1;
                 var used=owned.Select(LogicalKey).Distinct().Count();
                 var sameVod=allowHandoff&&kind!="live"&&matching.Any(x=>x.Kind==kind&&x.AssetId==assetId);
-                if(!sameVod&&(used<limit||sameLive))
+                if(!sameVod&&liveMatches<2&&(used<limit||sameLive))
                 {
                     var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff,Client=client};active.Add(lease.Id,lease);return lease;
                 }
