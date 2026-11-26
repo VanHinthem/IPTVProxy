@@ -1,5 +1,6 @@
 @page "/updates"
 @using IPTVProxy.Providers
+@using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Web
 @using System.Globalization
 @implements IDisposable
@@ -28,7 +29,7 @@
 }
 </tbody></table>
 <p>0 = automatische import uit. Bij mislukking blijft de vorige catalogus beschikbaar.</p>
-<h2>Nieuwe en verdwenen items</h2>
+<h2 id="changes">Nieuwe en verdwenen items</h2>
 <select @bind="provider" @bind:after="Filter"><option value="0">Alle providers</option>@foreach(var p in states.Select(s=>(s.State.ProviderId,s.State.Provider)).Distinct()){<option value="@p.ProviderId">@p.Provider</option>}</select>
 <select @bind="kind" @bind:after="Filter"><option value="">Alle typen</option><option value="live">Live TV</option><option value="movie">Films</option><option value="series">Series</option></select>
 <select @bind="entity" @bind:after="Filter"><option value="">Alle items</option><option value="category">Providercategorieën</option><option value="channel">Kanaalbronnen</option><option value="logical">Logische kanalen</option><option value="title">Films/series</option></select>
@@ -60,14 +61,23 @@
     private long? Running(CatalogHistory.State s)=>History.RunningSince(s.ProviderId,s.Kind);
     private static void ValidateDraft(Row row){row.Dirty=true;row.Valid=int.TryParse(row.Draft,NumberStyles.None,CultureInfo.InvariantCulture,out var hours)&&hours>=0&&hours<=168;if(row.Valid)row.Hours=hours;}
     protected override Task OnAfterRenderAsync(bool firstRender){if(firstRender){interactive=true;StateHasChanged();_=Poll(polling.Token);}return Task.CompletedTask;}
-    private async Task Poll(CancellationToken ct){using var timer=new PeriodicTimer(TimeSpan.FromSeconds(3));try{while(await timer.WaitForNextTickAsync(ct)){await InvokeAsync(async()=>{if(!busy&&!pollingNow){pollingNow=true;try{await LoadStates(true);}finally{pollingNow=false;}}StateHasChanged();});}}catch(OperationCanceledException) when(ct.IsCancellationRequested){}catch(Exception ex){Log.LogWarning("Updates polling failed: {ErrorType}",ex.GetType().Name);}}
+    private async Task Poll(CancellationToken ct){using var timer=new PeriodicTimer(TimeSpan.FromSeconds(3));try{while(await timer.WaitForNextTickAsync(ct)){await InvokeAsync(async()=>{if(!busy&&!pollingNow){pollingNow=true;try{var before=states.Select(r=>(r.State.ProviderId,r.State.Kind,r.State.LastAttempt,r.State.Success)).ToArray();await LoadStates(true);if(!busy&&!before.SequenceEqual(states.Select(r=>(r.State.ProviderId,r.State.Kind,r.State.LastAttempt,r.State.Success))))await LoadResults();}finally{pollingNow=false;}}StateHasChanged();});}}catch(OperationCanceledException) when(ct.IsCancellationRequested){}catch(Exception ex){Log.LogWarning("Updates polling failed: {ErrorType}",ex.GetType().Name);}}
     public void Dispose(){polling.Cancel();polling.Dispose();}
     private CancellationToken Ct=>CancellationToken.None;
     private static string Date(long? value)=>value is long v?TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(v),LocalZone).ToString("dd-MM-yyyy HH:mm"):"—";
     private static string Type(string kind)=>kind switch{"live"=>"Live TV","movie"=>"Films","series"=>"Series",_=>kind};
     private static string Entity(string value)=>value switch{"category"=>"Categorie","channel"=>"Kanaalbron","logical"=>"Logisch kanaal","title"=>"Titel",_=>value};
     private static string Action(string value)=>value switch{"added"=>"Nieuw","returned"=>"Teruggekeerd","removed"=>"Verdwenen","available"=>"Beschikbaar",_=>value};
-    protected override Task OnInitializedAsync()=>Refresh();
+    [SupplyParameterFromQuery(Name="kind")] public string? InitialKind{get;set;}
+    [SupplyParameterFromQuery(Name="entity")] public string? InitialEntity{get;set;}
+    [SupplyParameterFromQuery(Name="action")] public string? InitialAction{get;set;}
+    protected override async Task OnParametersSetAsync()
+    {
+        kind=InitialKind is "live" or "movie" or "series"?InitialKind:"";
+        entity=InitialEntity is "category" or "channel" or "logical" or "title"?InitialEntity:"";
+        action=InitialAction is "added" or "returned" or "removed" or "available"?InitialAction:"";
+        page=runPage=0;await Refresh();
+    }
     private async Task Run(Func<Task> task){if(busy)return;busy=true;try{await task();}catch(Exception ex){Log.LogWarning("Updates action failed: {ErrorType}",ex.GetType().Name);status="Actie mislukt. Vernieuw het overzicht of controleer de importhistorie.";}finally{busy=false;}}
     private async Task LoadStates(bool statusOnly=false)
     {

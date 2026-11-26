@@ -18,6 +18,7 @@
 <button disabled="@busy" @onclick='()=>ChangeKind("movie")'>Films</button>
 <button disabled="@busy" @onclick='()=>ChangeKind("series")'>Series</button>
 <h2>@(kind=="movie"?"Films":"Series")</h2>
+<p><a href="@($"/updates?kind={kind}&entity=category&action=added#changes")">Nieuwe providercategorieën</a> · <a href="@($"/updates?kind={kind}&entity=title&action=added#changes")">Nieuwe titels per provider</a></p>
 <p>@categories.Where(c=>c.Kind==kind).Sum(c=>c.Count).ToString("N0") geïmporteerd · @published.Sum(c=>c.Count).ToString("N0") gepubliceerd · @published.Count categorieën</p>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1.5rem">
 <section>
