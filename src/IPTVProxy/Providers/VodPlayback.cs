@@ -6,7 +6,7 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,ViewerAccounts a
     {
         log.LogInformation("VOD request: {Kind} {Id}, method {Method}, range {HasRange}",kind,id,ctx.Request.Method,ctx.Request.Headers.ContainsKey("Range"));
         var access=await accounts.Authenticate(username,password,ctx.RequestAborted);
-        if(access is null){log.LogWarning("VOD authentication rejected");ctx.Response.StatusCode=401;return;}
+        if(access is null || (!access.Account.AllowRemote && !ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx))){log.LogWarning("VOD authentication rejected");ctx.Response.StatusCode=401;return;}
         var ct=ctx.RequestAborted;
         bool replaced=false;
         try
