@@ -64,4 +64,18 @@ Check(ManagedPublication.Eligible(referenceGroup,new LogicalChannel{Name="Test"}
 Check(ManagedPublication.SortKey(referenceGroup,referenceSources)==(0,0,4),"reference ordering");
 Check(ArtworkService.ValidUrl("https://example.com/logo.png")&&!ArtworkService.ValidUrl("file:///tmp/logo.png")&&!ArtworkService.ValidUrl("http://localhost/logo.png")&&!ArtworkService.ValidUrl("https://user:password@example.com/logo.png"),"artwork URL validation");
 Check(XmlTvGuide.Time("20261125203000 +0100")?.Hour==19,"XMLTV UTC conversion");
+await db.Database.ExecuteSqlRawAsync("""
+INSERT INTO VodCategories(Id,ProviderId,Kind,SourceId,Name,Selected) VALUES(1,1,'movie','10','Visible',1),(2,1,'movie','20','Hidden',0),(3,1,'series','30','Series',1);
+INSERT INTO VodItems(ProviderId,Kind,SourceId,CategoryId,Name,Extension,Metadata) VALUES(1,'movie',100,1,'Gladiator','mp4','{}'),(1,'movie',200,2,'Gladiator II','mp4','{}'),(1,'series',300,3,'Gladiator Series','mp4','{}');
+""");
+var vodPublication=new VodPublication(new FixtureFactory(options));
+var allTitles=await vodPublication.Search("movie","gladiator",false,0,CancellationToken.None);
+Check(allTitles.Count==2&&allTitles.Count(t=>t.Published)==1,"VOD search includes unpublished titles without nullable boolean");
+Check((await vodPublication.Search("movie","GLADIATOR",true,0,CancellationToken.None)).Single().Name=="Gladiator","VOD published search and case-insensitivity");
+Check((await vodPublication.Search("series","gladiator",false,0,CancellationToken.None)).Count==1,"VOD search separates content types");
+Check((await vodPublication.Search("movie","no matching title",false,0,CancellationToken.None)).Count==0,"VOD empty search");
 Console.WriteLine("Catalog checks passed.");
+sealed class FixtureFactory(DbContextOptions<CatalogDb> options):IDbContextFactory<CatalogDb>
+{
+    public CatalogDb CreateDbContext()=>new(options);
+}

@@ -9,7 +9,7 @@ public sealed class VodPublication(IDbContextFactory<CatalogDb> factory)
     // A source belongs to at most one custom group, even while disabled.
     // This preserves one stable item ID and one category per Xtream item.
     internal const string Joins=" LEFT JOIN VodGroupSources gs ON gs.CategoryId=c.Id LEFT JOIN VodGroups g ON g.Id=gs.GroupId ";
-    internal const string Visible=" i.Active=1 AND c.Active=1 AND p.Enabled=1 AND ((gs.GroupId IS NULL AND c.Selected=1) OR (g.Enabled=1 AND g.Kind=i.Kind)) ";
+    internal const string Visible=" i.Active=1 AND c.Active=1 AND p.Enabled=1 AND ((gs.GroupId IS NULL AND c.Selected=1) OR (COALESCE(g.Enabled,0)=1 AND g.Kind=i.Kind)) ";
     internal const string EffectiveId="CASE WHEN g.Id IS NULL THEN c.Id ELSE 1000000000+g.Id END";
     public sealed record Group(int Id,string Kind,string Name,bool Enabled,int[] Sources);
     public sealed record Published(int Id,string Kind,string Name,long Count);

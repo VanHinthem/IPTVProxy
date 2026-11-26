@@ -54,3 +54,5 @@ NAS 135f8e2: SuperTV filmplayback, beeld/geluid en seek; Strong8K film- en serie
 
 ## Increment 2
 Eigen VOD-categorieën met broncategorieën uit beide providers, hernoemen, aan/uit, verwijderen, zoek/bulkselectie, publicatievolgorde en titelzoeker. Eén broncategorie kan aan maximaal één eigen categorie gekoppeld zijn; deze vervangt dan originele publicatie. Bestaande selectievlaggen blijven bewaard en worden weer actief na loskoppelen. Film/serie/episode-ID's blijven ongewijzigd; custom category IDs gebruiken apart positief bereik. Geen wijzigingen aan streaming. CI/NAS nog te valideren.
+
+NAS 6100a87: user reports all increment 2 functions working except title search. Fixed nullable SQLite publication predicate for unselected ungrouped categories (GetBoolean on NULL), added local feedback and debounced search, regression checks for visible/hidden titles and content type. Retest pending.

@@ -3,6 +3,7 @@
 @using IPTVProxy.Providers
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.AspNetCore.Components.Web
+@inject ILogger<Vod> Log
 @inject VodCatalog Catalog
 @inject VodPublication Publication
 @inject IDbContextFactory<CatalogDb> Factory
@@ -93,9 +94,10 @@ else
 </section>
 </div>
 <h3>Titels zoeken</h3>
-<input placeholder="Film of serie" @bind="titleSearch" @bind:event="oninput" />
-<label><input type="checkbox" @bind="onlyPublished" /> Alleen gepubliceerd</label>
+<input placeholder="Film of serie" @bind="titleSearch" @bind:event="oninput" @bind:after="DebounceSearch" />
+<label><input type="checkbox" @bind="onlyPublished" @bind:after="RefreshSearch" /> Alleen gepubliceerd</label>
 <button disabled="@busy" @onclick="()=>SearchTitles(0)">Zoeken</button>
+<p role="status">@searchStatus</p>
 <table style="width:100%;text-align:left"><thead><tr><th>Titel</th><th>Provider</th><th>Categorie</th><th>Publicatie</th></tr></thead><tbody>
 @foreach(var t in titles.Take(50)){<tr><td>@t.Name</td><td>@t.Provider</td><td>@t.Category</td><td>@(t.Published?"Ja":"Nee")</td></tr>}
 </tbody></table>
@@ -109,7 +111,8 @@ else
     private List<VodPublication.Title> titles=new();
     private string kind="movie",search="",status="",providerFilter="",selectionFilter="",editName="",titleSearch="";
     private bool busy,editing,editEnabled=true,confirmDelete,onlyPublished;
-    private int editId,dragId,titlePage;
+    private int editId,dragId,titlePage,searchRevision;
+    private string searchStatus="Vul minimaal twee tekens in.";
     private HashSet<int> editSources=new();
     private CancellationToken Ct=>CancellationToken.None;
     private VodPublication.Group? Owner(int id)=>groups.FirstOrDefault(g=>g.Sources.Contains(id));
@@ -121,7 +124,7 @@ else
         await Refresh();
     }
     private async Task Refresh(){categories=await Catalog.Categories(Ct);groups=await Publication.Groups(kind,Ct);published=await Publication.List(kind,Ct);}
-    private async Task ChangeKind(string value){if(busy)return;kind=value;CancelEdit();titles.Clear();titlePage=0;await Refresh();}
+    private async Task ChangeKind(string value){if(busy)return;kind=value;CancelEdit();++searchRevision;titles.Clear();titlePage=0;searchStatus="Vul minimaal twee tekens in.";await Refresh();await RefreshSearch();}
     private async Task Run(Func<Task> action)
     {if(busy)return;busy=true;try{await action();await Refresh();}catch(ArgumentException ex){status=ex.Message;}catch{status="Actie mislukt; bestaande gegevens behouden.";}finally{busy=false;}}
     private Task Import(int id,string type)=>Run(async()=>{status="Import bezig...";var n=await Catalog.ImportAsync(id,type,Ct);status=$"Import geslaagd: {n} items.";});
@@ -138,5 +141,30 @@ else
     private Task Move(int id,int delta){var ids=published.Select(c=>c.Id).ToList();var from=ids.IndexOf(id);var to=from+delta;return Reorder(ids,from,to);}
     private Task Drop(int target){var ids=published.Select(c=>c.Id).ToList();return Reorder(ids,ids.IndexOf(dragId),ids.IndexOf(target));}
     private Task Reorder(List<int> ids,int from,int to){if(from<0||to<0||to>=ids.Count||from==to)return Task.CompletedTask;var id=ids[from];ids.RemoveAt(from);ids.Insert(to,id);return Run(()=>Publication.Reorder(kind,ids.ToArray(),Ct));}
-    private Task SearchTitles(int page)=>Run(async()=>{titlePage=Math.Max(0,page);titles=await Publication.Search(kind,titleSearch,onlyPublished,titlePage*50,Ct);});
+    private async Task DebounceSearch()
+    {
+        var revision=++searchRevision;
+        await Task.Delay(350);
+        if(revision==searchRevision)await SearchTitles(0);
+    }
+    private Task RefreshSearch()=>SearchTitles(0);
+    private async Task SearchTitles(int page)
+    {
+        var revision=++searchRevision;var term=titleSearch.Trim();
+        if(term.Length<2){titles.Clear();titlePage=0;searchStatus="Vul minimaal twee tekens in.";return;}
+        searchStatus="Zoeken...";
+        try
+        {
+            var result=await Publication.Search(kind,term,onlyPublished,Math.Max(0,page)*50,Ct);
+            if(revision!=searchRevision)return;
+            titles=result;titlePage=Math.Max(0,page);
+            searchStatus=result.Count==0?"Geen titels gevonden.":$"Resultaten {titlePage*50+1}–{titlePage*50+Math.Min(50,result.Count)}"+(result.Count>50?" (meer beschikbaar)":"");
+        }
+        catch(Exception ex)
+        {
+            if(revision!=searchRevision)return;
+            titles.Clear();searchStatus="Zoeken mislukt. Probeer opnieuw.";
+            Log.LogWarning("VOD title search failed: {ErrorType}",ex.GetType().Name);
+        }
+    }
 }
