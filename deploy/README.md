@@ -6,9 +6,9 @@ Initial test: bind to loopback, set PUBLIC_BASE_URL=http://localhost:5089, run d
 
 For HTTPS use a trusted reverse proxy, preserve Host, enable WebSockets and disable proxy buffering/cache for live streams. Disable access logging for credential-bearing URLs throughout the proxy chain. Set PUBLIC_BASE_URL to the actual HTTPS origin. Restrict the backend port to the proxy by private Docker networking or firewall rules; never forward the backend directly from the internet.
 
-For remote playback without VPN, use a public trusted TLS certificate at the reverse proxy and forward only the required HTTPS port. A DNS-only record can avoid buffering via a CDN; this exposes the origin IP and removes CDN protection. Restrict administration to trusted networks using proxy rules covering the admin UI, static assets and Blazor negotiation endpoints. Do not expose NAS management ports. Verify access restrictions from outside the LAN before enabling remote users. The application currently uses separate bootstrap admin and IPTV accounts, a basic origin check and rate limits; it is not a hardened multi-user service. Rate limits currently see the proxy IP rather than individual remote clients.
+For remote playback without VPN, use a public trusted TLS certificate at the reverse proxy and forward only the required HTTPS port. A DNS-only record can avoid buffering via a CDN; this exposes the origin IP and removes CDN protection. Restrict administration to trusted networks using proxy rules covering the admin UI, static assets and Blazor negotiation endpoints. Do not expose NAS management ports. Verify access restrictions from outside the LAN before enabling remote users. The application currently uses separate bootstrap admin and IPTV accounts, a basic origin check and rate limits; it is not a hardened multi-user service. Without explicit trusted-proxy configuration, rate limits see the proxy IP rather than individual remote clients.
 
-Add only authorized providers with their actual subscription connection limits. HTTP and HTTPS upstreams are accepted; HTTP exposes provider credentials and data in transit. Live MPEG-TS only, with bounded validated redirects and a shared in-memory ring buffer per active channel. Single-viewer channel switching can displace other viewers on providers with a single allowed connection; disable it for independent simultaneous users (Playback__SingleViewerChannelSwitch=false via compose environment).
+Add only authorized providers with their actual subscription connection limits. HTTP and HTTPS upstreams are accepted; HTTP exposes provider credentials and data in transit. Live MPEG-TS only, with bounded validated redirects and a shared in-memory ring buffer per active channel. In workblock 4 automatic displacement is disabled; a new request must wait for its account and provider capacity.
 
 Test provider import, catalog visibility, playback, switching and stability; confirm external access separately. Do not share real credentials or stream URLs in bug reports.
 
@@ -20,4 +20,13 @@ XMLTV wordt lokaal gecachet en als volledig bestand aangeboden. `Epg__RefreshHou
 
 
 ## Werkblok 3 en 4
-Films en series gebruiken native HTTP Range-playback. Importintervallen worden per provider/type via Updates beheerd (0 = uit). Werkblok 4 introduceert accounts, playlists en onafhankelijke sessies; deze zijn nog niet geaccepteerd. Gebruik de huidige single-viewer configuratie niet voor onafhankelijke externe kijkers. Controleer bij upgrade behoud van IDs, account, catalogus en volume.
+Films en series gebruiken native HTTP Range-playback. Importintervallen worden per provider/type via Updates beheerd (0 = uit). Werkblok 4 introduceert accounts, playlists en onafhankelijke sessies; deze zijn nog niet geaccepteerd. Externe gebruikers pas toelaten na succesvolle netwerk- en multi-user-acceptatie. Controleer bij upgrade behoud van IDs, account, catalogus en volume.
+
+### Netwerkconfiguratie werkblok 4
+- `TRUSTED_PROXIES`: komma-gescheiden daadwerkelijke TCP-peeradressen van Nginx zoals gezien vanuit de container. Geen willekeurige Docker-subnetten vertrouwen.
+- `LOCAL_NETWORKS`: komma-gescheiden CIDR-bereiken van eigen LAN/VPN. Neem geen proxy- of Docker-bridgebereik op.
+- `RESTRICT_ADMIN=true`: pas inschakelen nadat beheer via een vertrouwde lokale client is getest. Standaard false voor migratiecompatibiliteit.
+- Nginx moet X-Forwarded-For overschrijven met het gevalideerde clientadres (bij één directe proxy: $remote_addr). Geen door de client aangeleverde waarde vertrouwen. Bij extra proxyhops eerst de keten afzonderlijk configureren en testen.
+- Controleer vanaf LAN én extern dat beheer en lokale accounts correct worden geweigerd/toegelaten. Behoud de reverse-proxyrestricties als extra beveiligingslaag.
+- Maak vooraf een consistente volumebackup. Na migratie worden IPTV-wachtwoorden beheerd in Gebruikers; de bootstrapvariabelen blijven vereist voor deze versie maar overschrijven bestaande accounts niet.
+- Zappen/seek: bij overlappende requests en limiet 1 wacht de nieuwe request maximaal vijf seconden op vrijgave; geen automatische verdringing op basis van account/IP. Nuvio en Arvio moeten dit nog praktisch valideren.
