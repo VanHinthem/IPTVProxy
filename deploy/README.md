@@ -20,7 +20,7 @@ XMLTV wordt lokaal gecachet en als volledig bestand aangeboden. `Epg__RefreshHou
 
 
 ## Werkblok 3 en 4
-Films en series gebruiken native HTTP Range-playback. Importintervallen worden per provider/type via Updates beheerd (0 = uit). Werkblok 4 introduceert accounts, playlists en onafhankelijke sessies; deze zijn nog niet geaccepteerd. Externe gebruikers pas toelaten na succesvolle netwerk- en multi-user-acceptatie. Controleer bij upgrade behoud van IDs, account, catalogus en volume.
+Films en series gebruiken native HTTP Range-playback. Importintervallen worden per provider/type via Updates beheerd (0 = uit). Werkblok 4 introduceert accounts, playlists en onafhankelijke sessies; functioneel geaccepteerd op de NAS op 26 november 2026. Verifieer de netwerkrestricties bij elke wijziging van de proxyconfiguratie. Controleer bij upgrade behoud van IDs, account, catalogus en volume.
 
 ### Netwerkconfiguratie werkblok 4
 - `TRUSTED_PROXIES`: komma-gescheiden daadwerkelijke TCP-peeradressen van Nginx zoals gezien vanuit de container. Geen willekeurige Docker-subnetten vertrouwen.
@@ -29,4 +29,20 @@ Films en series gebruiken native HTTP Range-playback. Importintervallen worden p
 - Nginx moet X-Forwarded-For overschrijven met het gevalideerde clientadres (bij één directe proxy: $remote_addr). Geen door de client aangeleverde waarde vertrouwen. Bij extra proxyhops eerst de keten afzonderlijk configureren en testen.
 - Controleer vanaf LAN én extern dat beheer en lokale accounts correct worden geweigerd/toegelaten. Behoud de reverse-proxyrestricties als extra beveiligingslaag.
 - Maak vooraf een consistente volumebackup. Na migratie worden IPTV-wachtwoorden beheerd in Gebruikers; de bootstrapvariabelen blijven vereist voor deze versie maar overschrijven bestaande accounts niet.
-- Zappen/seek: bij overlappende requests en limiet 1 wacht de nieuwe request maximaal vijf seconden op vrijgave; geen automatische verdringing op basis van account/IP. Nuvio en Arvio moeten dit nog praktisch valideren.
+- Zappen/seek: bij overlappende requests en limiet 1 wacht de nieuwe request maximaal vijf seconden op vrijgave; een begrensde handoff is toegestaan binnen dezelfde herkende speler; verschillende accounts verdringen elkaar niet. IP/User-Agent-herkenning is heuristisch, geen harde apparaatidentiteit.
+
+### Bestaande NPM-installatie behouden
+Gebruik het reeds bestaande externe NPM Docker-netwerk; voeg uitsluitend IPTVProxy toe aan dat netwerk naast zijn default netwerk. In de bestaande NAS-compose, onder de service: 
+```yaml
+    networks:
+      - default
+      - npm
+```
+En op topniveau:
+```yaml
+networks:
+  npm:
+    external: true
+    name: nginx-proxy-manager_default
+```
+Behoud de bestaande LAN-poortbinding, het volume en alle overige instellingen. Configureer de bestaande NPM proxy-host met het daadwerkelijk toegewezen IPTVProxy-adres op dit netwerk en interne poort 8080. Vertrouw uitsluitend het actuele NPM-peeradres via TRUSTED_PROXIES. De gebruiker kiest ervoor NPM zelf niet te herconfigureren of opnieuw aan te maken; dynamische IP-adressen blijven een bewuste operationele beperking. Controleer beide adressen na elke container-recreate en corrigeer zo nodig de proxy-host en TRUSTED_PROXIES voordat externe toegang wordt gebruikt. Controleer /health, lokale beheerlogin, externe weigering van beheer en lokale accounts, en externe playback van toegestane accounts. Bij afwijkingen externe toegang blokkeren tot herstel. Controleer tevens dat aangeleverde X-Forwarded-For niet kan worden gebruikt om lokale toegang te verkrijgen. Gebruik geen gehele Docker-subnetten als vertrouwde proxy of lokaal netwerk. Lokale directe HTTP-toegang is alleen voor een vertrouwd LAN; externe toegang via HTTPS. Split DNS is optioneel. Geen wijziging van NPM-container, router of DNS-server vereist.
