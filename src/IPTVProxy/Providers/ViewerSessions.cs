@@ -1,7 +1,7 @@
 namespace IPTVProxy.Providers;
 
-// Each active body request owns its lease. No IP-based eviction: an Xtream
-// request alone cannot prove that it belongs to the same physical player.
+// Each active body request owns its lease. Optional single-account handoff
+// replaces only that account's request, never another account's viewer.
 public sealed class ViewerSessions
 {
     private readonly object gate=new();
@@ -17,8 +17,12 @@ public sealed class ViewerSessions
         internal readonly DateTimeOffset Started=DateTimeOffset.UtcNow;
         internal int ProviderId,SourceId;
         internal long Bytes;
+        internal readonly CancellationTokenSource Stop=new();
+        internal bool Closing;
+        public CancellationToken Token {get;}
+
         internal Lease(ViewerSessions owner,int accountId,string kind,int assetId)
-        {this.owner=owner;AccountId=accountId;Kind=kind;AssetId=assetId;}
+        {this.owner=owner;AccountId=accountId;Kind=kind;AssetId=assetId;Token=Stop.Token;}
         public void Bind(int provider,int source)
         {lock(owner.gate){ProviderId=provider;SourceId=source;}}
         public void AddBytes(int count)=>Interlocked.Add(ref Bytes,count);
@@ -27,6 +31,7 @@ public sealed class ViewerSessions
             lock(owner.gate)
             {
                 if(!owner.active.Remove(Id))return;
+                Stop.Dispose();
                 var signal=owner.changed;owner.changed=new(TaskCreationOptions.RunContinuationsAsynchronously);signal.TrySetResult();
             }
         }
@@ -36,7 +41,7 @@ public sealed class ViewerSessions
     {
         lock(gate)return active.Values.Select(x=>new Snapshot(x.Id,x.AccountId,x.Kind,x.AssetId,x.Started,x.ProviderId,x.SourceId,Interlocked.Read(ref x.Bytes))).ToArray();
     }
-    public async Task<Lease?> Acquire(int accountId,int limit,string kind,int assetId,CancellationToken ct)
+    public async Task<Lease?> Acquire(int accountId,int limit,string kind,int assetId,CancellationToken ct,bool allowHandoff=false)
     {
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
@@ -49,6 +54,11 @@ public sealed class ViewerSessions
                 if(active.Values.Count(x=>x.AccountId==accountId)<limit)
                 {
                     var lease=new Lease(this,accountId,kind,assetId);active.Add(lease.Id,lease);return lease;
+                }
+                if(allowHandoff&&limit==1)
+                {
+                    var previous=active.Values.SingleOrDefault(x=>x.AccountId==accountId);
+                    if(previous is not null&&!previous.Closing){previous.Closing=true;previous.Stop.Cancel();}
                 }
                 wait=changed.Task;
             }
