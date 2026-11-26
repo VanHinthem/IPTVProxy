@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IPTVProxy.Providers;
 
-public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog live,IHttpClientFactory clients,ArtworkService artwork)
+public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog live,IHttpClientFactory clients,ArtworkService artwork,CatalogHistory history,ILogger<VodCatalog> log)
 {
     private readonly SemaphoreSlim imports=new(1,1), details=new(1,1);
     public sealed record Category(int Id,string Kind,string Provider,string Name,bool Selected,long Count);
@@ -71,6 +71,7 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
     {
         if(kind is not ("movie" or "series"))throw new ArgumentException("Invalid content type.");
         await imports.WaitAsync(ct);
+        var started=CatalogHistory.Now();
         try
         {
             await using var db=await factory.CreateDbContextAsync(ct);
@@ -92,6 +93,7 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
             await db.Database.OpenConnectionAsync(ct);
             var conn=(SqliteConnection)db.Database.GetDbConnection();
             using var tx=conn.BeginTransaction();
+            var before=await CatalogHistory.Snapshot(conn,tx,providerId,kind,ct);
             var old=await Scalar(conn,tx,"SELECT count(*) FROM VodItems WHERE ProviderId=$0 AND Kind=$1 AND Active=1",ct,providerId,kind);
             if(rows.Count<old*0.8)throw new InvalidDataException("Suspicious catalog shrinkage.");
             await Exec(conn,tx,"UPDATE VodItems SET Active=0 WHERE ProviderId=$0 AND Kind=$1",ct,providerId,kind);
@@ -110,8 +112,11 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
                 upsert.Parameters[2].Value=Source(item,kind=="movie"?"stream_id":"series_id");upsert.Parameters[3].Value=catIds[Str(item,"category_id")];upsert.Parameters[4].Value=Str(item,"name");upsert.Parameters[5].Value=Ext(Str(item,"container_extension"));upsert.Parameters[6].Value=Metadata(item).ToJsonString();upsert.Parameters[7].Value=order++;
                 await upsert.ExecuteNonQueryAsync(ct);
             }
+            await CatalogHistory.RecordSuccess(conn,tx,providerId,kind,started,before,null,ct);
             await tx.CommitAsync(ct);return rows.Count;
         }
+        catch(Exception ex) when(!ct.IsCancellationRequested)
+        {try{await history.RecordFailure(providerId,kind,started,ex.GetType().Name,ct);}catch{log.LogWarning("VOD import history write failed for provider {ProviderId}",providerId);}throw;}
         finally{imports.Release();}
     }
     public async Task<List<Category>> Categories(CancellationToken ct)

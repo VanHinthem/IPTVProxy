@@ -1,24 +1,28 @@
 using IPTVProxy.Data;
-using Microsoft.EntityFrameworkCore;
-
 namespace IPTVProxy.Providers;
-public sealed class CatalogRefresh(LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, IConfiguration config, ILogger<CatalogRefresh> log) : BackgroundService
+public sealed class CatalogRefresh(LiveCatalog live,VodCatalog vod,CatalogHistory history,ILogger<CatalogRefresh> log):BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        var hours = config.GetValue("Catalog:RefreshHours", 6);
-        if (hours <= 0) return;
-        using var timer = new PeriodicTimer(TimeSpan.FromHours(Math.Clamp(hours,1,168)));
-        while (await timer.WaitForNextTickAsync(ct))
+        using var timer=new PeriodicTimer(TimeSpan.FromMinutes(1));
+        while(await timer.WaitForNextTickAsync(ct))
         {
-            await using var db = await factory.CreateDbContextAsync(ct);
-            var ids = await db.Providers.AsNoTracking().Where(p=>p.Enabled).Select(p=>p.Id).ToListAsync(ct);
-            foreach(var id in ids)
+            try
             {
-                try { await catalog.ImportAsync(id,ct); log.LogInformation("Scheduled catalog import succeeded for provider {ProviderId}",id); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
-                catch (Exception ex) { log.LogWarning("Scheduled catalog import failed for provider {ProviderId}: {ErrorType}",id,ex.GetType().Name); }
+                var states=await history.States(ct);var now=CatalogHistory.Now();
+                foreach(var s in states.Where(s=>s.Hours>0&&CatalogHistory.Next(s,now)<=now))
+                {
+                    try
+                    {
+                        if(s.Kind=="live")await live.ImportAsync(s.ProviderId,ct);else await vod.ImportAsync(s.ProviderId,s.Kind,ct);
+                        log.LogInformation("Scheduled catalog import succeeded: provider {ProviderId}, {Kind}",s.ProviderId,s.Kind);
+                    }
+                    catch(OperationCanceledException) when(ct.IsCancellationRequested){return;}
+                    catch(Exception ex){log.LogWarning("Scheduled catalog import failed: provider {ProviderId}, {Kind}, {ErrorType}",s.ProviderId,s.Kind,ex.GetType().Name);}
+                }
             }
+            catch(OperationCanceledException) when(ct.IsCancellationRequested){return;}
+            catch(Exception ex){log.LogWarning("Catalog scheduling failed: {ErrorType}",ex.GetType().Name);}
         }
     }
 }

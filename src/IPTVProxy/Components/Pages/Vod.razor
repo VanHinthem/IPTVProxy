@@ -9,7 +9,7 @@
 @inject IDbContextFactory<CatalogDb> Factory
 <PageTitle>Films en series</PageTitle>
 <h1>Films en series</h1>
-<p><a href="/">Providers</a> · <a href="/groups">Live TV-groepen</a></p>
+<p><a href="/">Providers</a> · <a href="/groups">Live TV-groepen</a> · <a href="/updates">Nieuwe titels en importhistorie</a></p>
 @foreach(var p in providers)
 {
     <p>@p.Name <button disabled="@busy" @onclick='()=>Import(p.Id,"movie")'>Films importeren</button> <button disabled="@busy" @onclick='()=>Import(p.Id,"series")'>Series importeren</button></p>

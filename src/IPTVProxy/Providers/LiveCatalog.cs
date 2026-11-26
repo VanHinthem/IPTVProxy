@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 namespace IPTVProxy.Providers;
 
 public record ProviderCredentials(string Username, string Password);
-public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProtectionProvider protection, IHttpClientFactory clients)
+public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProtectionProvider protection, IHttpClientFactory clients,CatalogHistory history,ILogger<LiveCatalog> log)
 {
     private static readonly SemaphoreSlim ImportGate = new(1, 1);
     private readonly IDataProtector protector = protection.CreateProtector("provider-credentials-v1");
@@ -79,6 +79,7 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
     public async Task<int> ImportAsync(int providerId, CancellationToken ct)
     {
         await ImportGate.WaitAsync(ct);
+        var started=CatalogHistory.Now();
         try
         {
             await using var db = await factory.CreateDbContextAsync(ct);
@@ -123,6 +124,10 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
             if (incoming.Count == 0 || incoming.Count < activeCount * 0.8)
                 throw new InvalidDataException("Empty or suspiciously reduced catalog; previous data retained.");
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            var conn=(Microsoft.Data.Sqlite.SqliteConnection)db.Database.GetDbConnection();
+            var sqlTx=(Microsoft.Data.Sqlite.SqliteTransaction)Microsoft.EntityFrameworkCore.Storage.DbContextTransactionExtensions.GetDbTransaction(transaction);
+            var before=await CatalogHistory.Snapshot(conn,sqlTx,providerId,"live",ct);
+            var logicalBefore=await CatalogHistory.LogicalActive(conn,sqlTx,ct);
             var existingCategories = await db.LiveCategories.Where(c => c.ProviderId == providerId).ToListAsync(ct);
             foreach (var row in existingCategories)
             {
@@ -140,9 +145,12 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
                 db.LiveStreams.Add(new LiveStream { ProviderId = providerId, SourceId = id, Name = value.Name, CategoryId = value.Category, EpgId = value.EpgId, Logo = value.Logo, SourceOrder=value.Order });
             await db.SaveChangesAsync(ct);
             await ChannelMatching.ReconcileAsync(db, ct);
+            await CatalogHistory.RecordSuccess(conn,sqlTx,providerId,"live",started,before,logicalBefore,ct);
             await transaction.CommitAsync(ct);
             return existing.Count(s => s.Active) + incoming.Count;
         }
+        catch(Exception ex) when(!ct.IsCancellationRequested)
+        {try{await history.RecordFailure(providerId,"live",started,ex.GetType().Name,ct);}catch{log.LogWarning("Live import history write failed for provider {ProviderId}",providerId);}throw;}
         finally { ImportGate.Release(); }
     }
 }

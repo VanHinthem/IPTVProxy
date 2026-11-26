@@ -20,6 +20,7 @@ builder.Services.AddDbContextFactory<CatalogDb>(options => options.UseSqlite(new
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddSingleton<LocalAccounts>();
 builder.Services.AddSingleton<LiveCatalog>();
+builder.Services.AddSingleton<CatalogHistory>();
 builder.Services.AddHostedService<CatalogRefresh>();
 builder.Services.AddSingleton<LivePlayback>();
 builder.Services.AddSingleton<ProviderConnectionCoordinator>();

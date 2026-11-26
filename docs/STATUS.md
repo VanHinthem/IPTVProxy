@@ -58,3 +58,8 @@ Eigen VOD-categorieën met broncategorieën uit beide providers, hernoemen, aan/
 NAS 6100a87: user reports all increment 2 functions working except title search. Fixed nullable SQLite publication predicate for unselected ungrouped categories (GetBoolean on NULL), added local feedback and debounced search, regression checks for visible/hidden titles and content type. Retest pending.
 
 NAS e6562be: user reports Lioness visible in IPTV app but absent from title search. NAS SQL confirms active matching movie and series rows for both providers. Decoupled title search content type from category management; default all films/series, explicit type filter and result type column; added combined search regression checks. Original missing-result cause not yet independently confirmed; NAS retest required.
+
+NAS dacbd29: Lioness is zichtbaar in onafhankelijke titelzoeker. Increment 2 functioneel geaccepteerd.
+
+## Increment 3 — cataloguswijzigingen en automatische imports
+Generieke transactionele importhistorie voor Live TV, films en series, per provider en type. Bestaande records vormen baseline; geen fictieve toevoegingsdatum. Nieuwe, teruggekeerde en verdwenen broncategorieën/titels/kanalen geregistreerd, plus beschikbaarheid van logische kanalen over providers heen (geen claim dat een teruggekeerd logisch kanaal nieuw is). Standaard Live 6 uur, VOD 24 uur; 0 schakelt automatische import uit, per provider/type instelbaar. Eerste geplande import na upgrade; fouten bewaren vorige catalogus en retry na maximaal 15 minuten. Geen wijzigingen aan playback of publicatie-ID's. UI, CI en NAS nog te testen. Historie vanaf upgrade, geen retrospectieve providerhistorie; geen episode-level of handmatige eigen-groepswijzigingen in deze ronde.
