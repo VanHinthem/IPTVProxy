@@ -48,7 +48,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
     {
         log.LogInformation("Playback requested: stream {StreamId}", id);
         var access=await accounts.Authenticate(username,password,ctx.RequestAborted);
-        if (access is null) { ctx.Response.StatusCode = 401; return; }
+        if (access is null || (!access.Account.AllowRemote && !ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx))) { ctx.Response.StatusCode = 401; return; }
         var publicId=id;
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
         if (id > ManagedPublication.PublicOffset)
