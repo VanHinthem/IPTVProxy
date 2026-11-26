@@ -36,6 +36,11 @@ public sealed class ViewerSessions
             }
         }
     }
+    // Legacy bootstrap account is treated as one player unless explicitly overridden.
+    public static bool SinglePlayerHandoff(IConfiguration config,string username)=>
+        config.GetValue("Playback:SingleViewerChannelSwitch",true) &&
+        (config["Playback:SinglePlayerAccounts"]??config["Accounts:IptvName"]??"viewer")
+            .Split(',',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries).Contains(username,StringComparer.Ordinal);
     public int Count(int accountId){lock(gate)return active.Values.Count(x=>x.AccountId==accountId);}
     public Snapshot[] List()
     {
