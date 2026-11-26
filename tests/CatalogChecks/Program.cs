@@ -1,4 +1,8 @@
 using IPTVProxy.Data;
+using IPTVProxy.Security;
+using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Http;
+using System.Net;
 using IPTVProxy.Providers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.Sqlite;
@@ -128,7 +132,57 @@ await history.RecordFailure(1,"movie",CatalogHistory.Now(),"FixtureFailure",ct);
 state=(await history.States(ct)).Single(x=>x.Kind=="movie");
 Check(state.Success==false&&state.LastSuccess!=null&&state.LastAttempt!=null&&CatalogHistory.Next(state,0)==state.LastAttempt.Value+900,"failure retry retains last success");
 Check((await history.Changes(1,"movie","","","",0,ct)).Count==4,"failure adds no phantom changes");
-Console.WriteLine("Catalog checks passed.");
+var viewerConfig=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+    ["Accounts:IptvName"]="fixture-viewer",["Accounts:IptvPassword"]="fixture-password-123",
+    ["Network:LocalNetworks"]="192.168.50.0/24,::1/128",["Network:TrustedProxies"]="172.20.0.1"
+}).Build();
+var viewersStore=new ViewerAccounts(new FixtureFactory(options),viewerConfig);
+await viewersStore.Bootstrap(ct);
+var initial=await viewersStore.Authenticate("fixture-viewer","fixture-password-123",ct);
+Check(initial is not null&&initial.Playlist.AllPublished&&initial.Account.AllowRemote,"bootstrap preserves full publication and legacy access");
+var original=initial!;
+await viewersStore.SavePlaylist(0,"Limited",true,false,[new("live",first.GroupId,0),new("movie",1,1)],ct);
+var limited=(await viewersStore.Playlists(ct)).Single(x=>x.Name=="Limited");
+await viewersStore.SaveAccount(0,"parents","parents-password-123",true,1,false,limited.Id,ct);
+var restricted=await viewersStore.Authenticate("parents","parents-password-123",ct);
+Check(restricted is not null&&restricted.Allows("live",first.GroupId)&&restricted.Allows("movie",1)&&!restricted.Allows("series",1)&&!restricted.Allows("movie",2),"playlist kind and category isolation");
+Check(await viewersStore.Authenticate("parents","wrong",ct) is null,"wrong password rejected");
+await viewersStore.SaveAccount(original.Account.Id,original.Account.Username,"changed-password-123",false,1,true,original.Playlist.Id,ct);
+await viewersStore.Bootstrap(ct);
+Check(await viewersStore.Authenticate(original.Account.Username,"fixture-password-123",ct) is null,"bootstrap does not restore old credentials");
+Check(await viewersStore.Authenticate(original.Account.Username,"changed-password-123",ct) is null,"disabled account rejected");
+await viewersStore.SaveAccount(original.Account.Id,original.Account.Username,null,true,1,true,original.Playlist.Id,ct);
+Check(await viewersStore.Authenticate(original.Account.Username,"changed-password-123",ct) is not null,"blank password retains hash");
+await viewersStore.SavePlaylist(limited.Id,"Limited",false,false,[],ct);
+Check(await viewersStore.Authenticate("parents","parents-password-123",ct) is null,"disabled playlist rejects login");
+var viewerSessions=new ViewerSessions();
+using var viewerOne=await viewerSessions.Acquire(1,1,"live",101,ct);
+using var viewerTwo=await viewerSessions.Acquire(2,1,"live",101,ct);
+Check(viewerOne is not null&&viewerTwo is not null&&viewerSessions.List().Length==2,"independent account leases");
+viewerOne!.Bind(1,101);viewerOne.AddBytes(188);
+Check(viewerSessions.List().Single(x=>x.AccountId==1).Bytes==188,"viewer traffic tracking");
+using(var cancelled=new CancellationTokenSource())
+{
+    var pendingViewer=viewerSessions.Acquire(1,1,"movie",202,cancelled.Token);
+    Check(!pendingViewer.IsCompleted,"account limit waits");
+    cancelled.Cancel();
+    Check(await pendingViewer is null&&viewerSessions.Count(1)==1&&viewerSessions.Count(2)==1,"capacity cancellation never evicts active viewers");
+}
+var nextViewer=viewerSessions.Acquire(1,1,"series",303,ct);
+viewerOne.Dispose();
+using var successor=await nextViewer;
+Check(successor is not null&&viewerSessions.Count(2)==1,"release wakes waiting viewer without affecting other account");
+viewerOne.Dispose();
+Check(viewerSessions.Count(1)==1,"lease disposal idempotent");
+var network=new ClientNetwork(viewerConfig);
+var http=new DefaultHttpContext();
+http.Connection.RemoteIpAddress=IPAddress.Parse("192.168.50.4");
+Check(network.IsLocal(http),"configured LAN accepted");
+http.Items["UnresolvedProxy"]=true;
+Check(!network.IsLocal(http),"unresolved proxy fails closed");
+http.Items.Clear();http.Connection.RemoteIpAddress=IPAddress.Parse("172.20.0.1");
+Check(!network.IsLocal(http)&&ClientNetwork.TrustedProxies(viewerConfig).Length==1,"proxy is not automatically local");
+Console.WriteLine("Catalog and viewer checks passed.");
 sealed class FixtureFactory(DbContextOptions<CatalogDb> options):IDbContextFactory<CatalogDb>
 {
     public CatalogDb CreateDbContext()=>new(options);
