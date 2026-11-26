@@ -60,12 +60,14 @@ public sealed class ViewerSessions
                 {
                     var lease=new Lease(this,accountId,kind,assetId);active.Add(lease.Id,lease);return lease;
                 }
+                // Capture the current signal BEFORE cancellation: releasing the old
+                // lease may run inline in a cancellation callback.
+                wait=changed.Task;
                 if(allowHandoff&&limit==1)
                 {
                     var previous=active.Values.SingleOrDefault(x=>x.AccountId==accountId);
                     if(previous is not null&&!previous.Closing){previous.Closing=true;previous.Stop.Cancel();}
                 }
-                wait=changed.Task;
             }
             try{await wait.WaitAsync(timeout.Token);}catch(OperationCanceledException){return null;}
         }
