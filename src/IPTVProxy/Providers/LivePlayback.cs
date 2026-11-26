@@ -50,6 +50,9 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         var access=await accounts.Authenticate(username,password,ctx.RequestAborted);
         if (access is null || (!access.Account.AllowRemote && !ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx))) { ctx.Response.StatusCode = 401; return; }
         var publicId=id;
+        var handoff=ViewerSessions.SinglePlayerHandoff(config,access.Account.Username);
+        using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,"live",publicId,ctx.RequestAborted,handoff);
+        if(viewer is null){log.LogWarning("Live account capacity exhausted for account {AccountId}",access.Account.Id);ctx.Response.StatusCode=503;return;}
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
         if (id > ManagedPublication.PublicOffset)
         {
@@ -81,12 +84,10 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         if (stream is null) { ctx.Response.StatusCode = 404; return; }
         var provider = await db.Providers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stream.ProviderId && x.Enabled, ctx.RequestAborted);
         if (provider is null) { ctx.Response.StatusCode = 404; return; }
-        using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,"live",publicId,ctx.RequestAborted);
-        if(viewer is null){ctx.Response.StatusCode=503;return;}
         viewer.Bind(provider.Id,id);
         Session session;
         bool start = false;
-        using var switchTimeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+        using var switchTimeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted,viewer.Token);
         switchTimeout.CancelAfter(TimeSpan.FromSeconds(5));
         while (true)
         {
@@ -144,7 +145,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             ctx.Response.Headers.CacheControl = "no-store";
             ctx.Response.Headers["X-Accel-Buffering"] = "no";
             var output = new byte[188 * 348]; // ~64 KiB, packet aligned
-            using var playbackStop = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, session.StopToken);
+            using var playbackStop = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, session.StopToken,viewer.Token);
             var ct = playbackStop.Token;
             while (!ct.IsCancellationRequested)
             {
@@ -167,7 +168,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         }
         catch (Exception ex)
         {
-            if (!ctx.RequestAborted.IsCancellationRequested && !session.StopToken.IsCancellationRequested)
+            if (!ctx.RequestAborted.IsCancellationRequested && !session.StopToken.IsCancellationRequested && !viewer.Token.IsCancellationRequested)
                 log.LogWarning("Subscriber failed for stream {StreamId}: {ErrorType}", id, ex.GetType().Name);
             if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 502;
             else ctx.Abort();
