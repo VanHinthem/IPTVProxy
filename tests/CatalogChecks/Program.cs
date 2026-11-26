@@ -176,12 +176,12 @@ viewerOne.Dispose();
 Check(viewerSessions.Count(1)==1,"lease disposal idempotent");
 // Reproduce the exact handoff race: cancellation releases the old lease inline.
 var handoffSessions=new ViewerSessions();
-using var oldViewer=await handoffSessions.Acquire(10,1,"live",101,ct);
+using var oldViewer=await handoffSessions.Acquire(10,1,"live",101,ct,true);
 using var independentViewer=await handoffSessions.Acquire(20,1,"live",101,ct);
 Check(oldViewer is not null&&independentViewer is not null,"handoff fixtures");
 using var releaseOnCancel=oldViewer!.Token.Register(oldViewer.Dispose);
 using var newViewer=await handoffSessions.Acquire(10,1,"live",101,ct,true);
-Check(newViewer is not null&&handoffSessions.Count(10)==1&&!oldViewer.Token.IsCancellationRequested,"same channel overlap counts once and preserves upstream");
+Check(newViewer is not null&&handoffSessions.List().Count(x=>x.AccountId==10)==2&&handoffSessions.Count(10)==1&&!oldViewer.Token.IsCancellationRequested,"same channel overlap counts once and preserves upstream");
 Check(!independentViewer!.Token.IsCancellationRequested&&handoffSessions.Count(20)==1,"handoff preserves another account sharing same channel");
 using var releaseVod= newViewer!.Token.Register(newViewer.Dispose);
 using var nextVod=await handoffSessions.Acquire(10,1,"series",11,ct,true);
