@@ -19,6 +19,7 @@ public sealed class ViewerSessions
         internal long Bytes;
         internal readonly CancellationTokenSource Stop=new();
         internal bool Closing;
+        internal bool SinglePlayer;
         public CancellationToken Token {get;}
 
         internal Lease(ViewerSessions owner,int accountId,string kind,int assetId)
@@ -41,7 +42,7 @@ public sealed class ViewerSessions
         config.GetValue("Playback:SingleViewerChannelSwitch",true) &&
         (config["Playback:SinglePlayerAccounts"]??config["Accounts:IptvName"]??"viewer")
             .Split(',',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries).Contains(username,StringComparer.Ordinal);
-    public int Count(int accountId){lock(gate)return active.Values.Where(x=>x.AccountId==accountId).Select(x=>x.Kind=="live"?$"live:{x.AssetId}":x.Id.ToString()).Distinct().Count();}
+    public int Count(int accountId){lock(gate)return active.Values.Where(x=>x.AccountId==accountId).Select(x=>x.SinglePlayer&&x.Kind=="live"?$"live:{x.AssetId}":x.Id.ToString()).Distinct().Count();}
     public Snapshot[] List()
     {
         lock(gate)return active.Values.Select(x=>new Snapshot(x.Id,x.AccountId,x.Kind,x.AssetId,x.Started,x.ProviderId,x.SourceId,Interlocked.Read(ref x.Bytes))).ToArray();
@@ -62,7 +63,7 @@ public sealed class ViewerSessions
                 var sameLive=allowHandoff&&limit==1&&kind=="live"&&owned.Length<2&&owned.Length>0&&owned.All(x=>!x.Closing&&x.Kind==kind&&x.AssetId==assetId);
                 if(owned.Length<limit||sameLive)
                 {
-                    var lease=new Lease(this,accountId,kind,assetId);active.Add(lease.Id,lease);return lease;
+                    var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff&&limit==1};active.Add(lease.Id,lease);return lease;
                 }
                 // Capture the current signal BEFORE cancellation: releasing the old
                 // lease may run inline in a cancellation callback.
