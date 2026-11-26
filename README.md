@@ -2,7 +2,7 @@
 
 Self-hosted IPTV-manager en streamingproxy voor geautoriseerde IPTV-bronnen. Het doel is aanzienlijk eenvoudiger configuratie en onderhoud dan Dispatcharr, met betrouwbare playback via bestaande spelers.
 
-**Status:** Werkblokken 1 en 2 afgerond; werkblok 3 (films en series) functioneel geïmplementeerd; afsluitende CI en review lopen.
+**Status:** Werkblokken 1–3 afgerond en gemerged; werkblok 4 (betrouwbaarheid, gebruikers en playlists) gestart.
 
 ## Documentatie
 - [MVP en architectuur](docs/MVP.md)
