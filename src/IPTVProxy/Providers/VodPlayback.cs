@@ -14,7 +14,7 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,ViewerAccounts a
             var media=await vod.Resolve(id,kind,ct,access);
             if(media is null){log.LogWarning("VOD item unavailable: {Kind} {Id}",kind,id);ctx.Response.StatusCode=404;return;}
             if(extension.Length>0&&!string.Equals(extension,media.Extension,StringComparison.OrdinalIgnoreCase))log.LogInformation("VOD requested extension differs; using catalog extension {Extension}",media.Extension);
-            using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,kind,id,ct,ViewerSessions.SinglePlayerHandoff(config,access.Account.Username)&&ctx.Request.Method!="HEAD");
+            using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,kind,id,ct,config.GetValue("Playback:SingleViewerChannelSwitch",true)&&ctx.Request.Method!="HEAD",ViewerSessions.ClientKey(ctx));
             if(viewer is null){ctx.Response.StatusCode=503;return;}
             viewer.Bind(media.Provider.Id,id);
             var key=new VodRequestCoordinator.Key(media.Provider.Id,kind,id,username,ctx.Connection.RemoteIpAddress?.ToString()??"unknown");
