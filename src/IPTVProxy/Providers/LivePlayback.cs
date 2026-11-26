@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IPTVProxy.Providers;
 
-public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, LocalAccounts accounts, ILogger<LivePlayback> log, IConfiguration config, ProviderConnectionCoordinator capacity)
+public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, ViewerAccounts accounts, ILogger<LivePlayback> log, IConfiguration config, ProviderConnectionCoordinator capacity)
 {
     private readonly object gate = new();
     private readonly Dictionary<int, Session> sessions = new();
@@ -47,10 +47,13 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
     public async Task Play(HttpContext ctx, string username, string password, int id)
     {
         log.LogInformation("Playback requested: stream {StreamId}", id);
-        if (!accounts.IptvValid(username, password)) { ctx.Response.StatusCode = 401; return; }
+        var access=await accounts.Authenticate(username,password,ctx.RequestAborted);
+        if (access is null) { ctx.Response.StatusCode = 401; return; }
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
         if (id > ManagedPublication.PublicOffset)
         {
+            var groupId=await db.PublishedIdentities.AsNoTracking().Where(x=>x.Id==id-ManagedPublication.PublicOffset).Select(x=>x.GroupId).SingleOrDefaultAsync(ctx.RequestAborted);
+            if(!access.Allows("live",groupId)){ctx.Response.StatusCode=404;return;}
             var candidates = await ManagedPublication.ResolveAsync(db, id, ctx.RequestAborted);
             if (candidates.Length == 0) { ctx.Response.StatusCode = 404; return; }
             // Select a currently available source; the existing session reservation remains
@@ -67,6 +70,11 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         {
             ctx.Response.StatusCode = 404;
             return;
+        }
+        if(!await ManagedPublication.IsEnabled(db,ctx.RequestAborted))
+        {
+            var category=await (from s in db.LiveStreams.AsNoTracking() join c in db.LiveCategories.AsNoTracking() on new {s.ProviderId,SourceId=s.CategoryId} equals new {c.ProviderId,c.SourceId} where s.Id==id&&s.Active&&c.Active select c.Id).SingleOrDefaultAsync(ctx.RequestAborted);
+            if(category==0||!access.Allows("raw",category)){ctx.Response.StatusCode=404;return;}
         }
         var stream = await db.LiveStreams.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id && x.Active, ctx.RequestAborted);
         if (stream is null) { ctx.Response.StatusCode = 404; return; }
