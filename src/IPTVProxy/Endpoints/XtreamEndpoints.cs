@@ -44,7 +44,7 @@ public static class XtreamEndpoints
         if(file is null)return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         return Results.File(file,"application/xml; charset=utf-8",enableRangeProcessing:false);
     }
-    private static async Task<IResult> Api(HttpContext ctx, ViewerAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork, VodCatalog vod, VodPublication publication)
+    private static async Task<IResult> Api(HttpContext ctx, ViewerAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork, VodCatalog vod, VodPublication publication, ViewerSessions viewers)
     {
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
@@ -91,7 +91,7 @@ public static class XtreamEndpoints
                 return Results.Json(new {
                     user_info = new { username = access.Account.Username, password = q["password"].ToString(),
                         auth = 1, status = "Active", exp_date = (string?)null, is_trial = "0",
-                        active_cons = "0", max_connections = access.Account.MaxStreams.ToString(), allowed_output_formats = new[] { "ts" } },
+                        active_cons = viewers.Count(access.Account.Id).ToString(), max_connections = access.Account.MaxStreams.ToString(), allowed_output_formats = new[] { "ts" } },
                     server_info = new { url = origin.Host, port = origin.Port.ToString(),
                         https_port = origin.Scheme == "https" ? origin.Port.ToString() : "",
                         server_protocol = origin.Scheme, timezone = "UTC",
