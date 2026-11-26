@@ -143,8 +143,8 @@ Check(initial is not null&&initial.Playlist.AllPublished&&initial.Account.AllowR
 var original=initial!;
 await viewersStore.SavePlaylist(0,"Limited",true,false,[new("live",first.GroupId,0),new("movie",1,1)],ct);
 var limited=(await viewersStore.Playlists(ct)).Single(x=>x.Name=="Limited");
-await viewersStore.SaveAccount(0,"parents","parents-password-123",true,1,false,limited.Id,ct);
-var restricted=await viewersStore.Authenticate("parents","parents-password-123",ct);
+await viewersStore.SaveAccount(0,"parents","Test!42@",true,1,false,limited.Id,ct);
+var restricted=await viewersStore.Authenticate("parents","Test!42@",ct);
 Check(restricted is not null&&restricted.Allows("live",first.GroupId)&&restricted.Allows("movie",1)&&!restricted.Allows("series",1)&&!restricted.Allows("movie",2),"playlist kind and category isolation");
 Check(await viewersStore.Authenticate("parents","wrong",ct) is null,"wrong password rejected");
 await viewersStore.SaveAccount(original.Account.Id,original.Account.Username,"changed-password-123",false,1,true,original.Playlist.Id,ct);
@@ -154,7 +154,7 @@ Check(await viewersStore.Authenticate(original.Account.Username,"changed-passwor
 await viewersStore.SaveAccount(original.Account.Id,original.Account.Username,null,true,1,true,original.Playlist.Id,ct);
 Check(await viewersStore.Authenticate(original.Account.Username,"changed-password-123",ct) is not null,"blank password retains hash");
 await viewersStore.SavePlaylist(limited.Id,"Limited",false,false,[],ct);
-Check(await viewersStore.Authenticate("parents","parents-password-123",ct) is null,"disabled playlist rejects login");
+Check(await viewersStore.Authenticate("parents","Test!42@",ct) is null,"disabled playlist rejects login");
 var viewerSessions=new ViewerSessions();
 using var viewerOne=await viewerSessions.Acquire(1,1,"live",101,ct);
 using var viewerTwo=await viewerSessions.Acquire(2,1,"live",101,ct);
