@@ -2,8 +2,9 @@ namespace IPTVProxy.Providers;
 
 // Each active body request owns its lease. Optional single-account handoff
 // replaces only that account's request, never another account's viewer.
-public sealed class ViewerSessions
+public sealed class ViewerSessions(ILogger<ViewerSessions>? log=null)
 {
+    private static readonly byte[] diagnosticSalt=System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
     private readonly object gate=new();
     private readonly Dictionary<Guid,Lease> active=new();
     private TaskCompletionSource changed=new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -21,6 +22,8 @@ public sealed class ViewerSessions
         internal bool Closing;
         internal bool SinglePlayer;
         internal string Client="";
+        internal string Network="";
+        internal string Agent="";
         public CancellationToken Token {get;}
 
         internal Lease(ViewerSessions owner,int accountId,string kind,int assetId)
@@ -45,8 +48,25 @@ public sealed class ViewerSessions
         var ip=ctx.Connection.RemoteIpAddress;
         if(ip?.IsIPv4MappedToIPv6==true)ip=ip.MapToIPv4();
         var agent=ctx.Request.Headers.UserAgent.ToString();
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes((ip?.ToString()??"unknown")+"\n"+agent)));
+        return Fingerprint((ip?.ToString()??"unknown")+"\n"+agent);
+    }
+    private static string Fingerprint(string value)=>Convert.ToHexString(System.Security.Cryptography.HMACSHA256.HashData(
+        diagnosticSalt,System.Text.Encoding.UTF8.GetBytes(value)));
+    private static string Short(string value)=>value[..Math.Min(12,value.Length)];
+    public static string NetworkKey(HttpContext ctx)
+    {
+        var ip=ctx.Connection.RemoteIpAddress;
+        if(ip?.IsIPv4MappedToIPv6==true)ip=ip.MapToIPv4();
+        return Fingerprint(ip?.ToString()??"unknown");
+    }
+    // User-Agent is untrusted and may contain arbitrary text. Only report a
+    // fingerprint, length, and known product family, never its raw contents.
+    public static string AgentInfo(HttpContext ctx)
+    {
+        var value=ctx.Request.Headers.UserAgent.ToString();
+        var family=new[]{"libvlc","VLC","Lavf","FFmpeg","ExoPlayer","Media3","Televizo","Arvio","Nuvio","Mozilla","Dalvik","okhttp","WinHTTP","Windows-Media-Player"}
+            .FirstOrDefault(x=>value.Contains(x,StringComparison.OrdinalIgnoreCase))??"other";
+        return $"{family}/{Short(Fingerprint(value))}/len:{value.Length}";
     }
     private static object LogicalKey(Lease x)=>x.SinglePlayer&&x.Kind=="live"
         ? (object)(x.Client,x.Kind,x.AssetId) : x.Id;
@@ -55,10 +75,11 @@ public sealed class ViewerSessions
     {
         lock(gate)return active.Values.Select(x=>new Snapshot(x.Id,x.AccountId,x.Kind,x.AssetId,x.Started,x.ProviderId,x.SourceId,Interlocked.Read(ref x.Bytes))).ToArray();
     }
-    public async Task<Lease?> Acquire(int accountId,int limit,string kind,int assetId,CancellationToken ct,bool allowHandoff=false,string client="")
+    public async Task<Lease?> Acquire(int accountId,int limit,string kind,int assetId,CancellationToken ct,bool allowHandoff=false,string client="",string network="",string agent="",bool unresolvedProxy=false,bool hasRange=false)
     {
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        var waitingLogged=false;
         while(!timeout.IsCancellationRequested)
         {
             Task wait;
@@ -73,25 +94,36 @@ public sealed class ViewerSessions
                 var sameVod=allowHandoff&&kind!="live"&&matching.Any(x=>x.Kind==kind&&x.AssetId==assetId);
                 if(!sameVod&&liveMatches<2&&(used<limit||sameLive))
                 {
-                    var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff,Client=client};active.Add(lease.Id,lease);return lease;
+                    var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff,Client=client,Network=network,Agent=agent};active.Add(lease.Id,lease);
+                    log?.LogInformation("Viewer admission granted: account {AccountId}, limit {Limit}, used {Used}, kind {Kind}, asset {Asset}, client {Client}, network {Network}, agent {Agent}, unresolved proxy {Unresolved}, range {Range}, overlap {Overlap}",accountId,limit,active.Values.Where(x=>x.AccountId==accountId).Select(LogicalKey).Distinct().Count(),kind,assetId,Short(client),Short(network),agent,unresolvedProxy,hasRange,sameLive);
+                    return lease;
                 }
                 // Capture signal before cancellation, including inline release.
                 wait=changed.Task;
+                Lease[] replace=[];
                 if(allowHandoff)
                 {
                     var sameAsset=matching.Where(x=>x.Kind==kind&&x.AssetId==assetId).ToArray();
                     // A same-client seek replaces its old VOD request. At capacity,
                     // only a single unambiguous logical session may be handed off.
-                    var replace=sameVod?sameAsset:
+                    replace=sameVod?sameAsset:
                         sameAsset.Length==0&&matching.Select(LogicalKey).Distinct().Count()==1?matching:Array.Empty<Lease>();
-                    foreach(var previous in replace)
-                    {
-                        previous.Closing=true;previous.Stop.Cancel();
-                    }
+                }
+                if(!waitingLogged)
+                {
+                    waitingLogged=true;
+                    var reason=replace.Length>0?"handoff":liveMatches>=2?"duplicate-limit":!allowHandoff?"strict-limit":matching.Length==0?"client-mismatch-or-closing":"logical-limit";
+                    var current=string.Join("; ",owned.Take(16).Select(x=>$"{x.Kind}:{x.AssetId} client={Short(x.Client)} network={Short(x.Network)} agent={x.Agent} closing={x.Closing}"));
+                    log?.LogInformation("Viewer admission waiting: account {AccountId}, limit {Limit}, used {Used}, kind {Kind}, asset {Asset}, client {Client}, network {Network}, agent {Agent}, unresolved proxy {Unresolved}, range {Range}, reason {Reason}, active [{Active}]",accountId,limit,used,kind,assetId,Short(client),Short(network),agent,unresolvedProxy,hasRange,reason,current);
+                }
+                foreach(var previous in replace)
+                {
+                    previous.Closing=true;previous.Stop.Cancel();
                 }
             }
-            try{await wait.WaitAsync(timeout.Token);}catch(OperationCanceledException){return null;}
+            try{await wait.WaitAsync(timeout.Token);}catch(OperationCanceledException){break;}
         }
+        log?.LogWarning("Viewer admission ended: account {AccountId}, kind {Kind}, asset {Asset}, client {Client}, reason {Reason}",accountId,kind,assetId,Short(client),ct.IsCancellationRequested?"request-cancelled":"capacity-timeout");
         return null;
     }
 }
