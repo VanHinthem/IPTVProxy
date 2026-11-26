@@ -17,6 +17,9 @@ public static class AdminGate
         { await next(); return; }
 
         ctx.Response.Headers.CacheControl = "no-store";
+        var config=ctx.RequestServices.GetRequiredService<IConfiguration>();
+        if(config.GetValue("Network:RestrictAdmin",false)&&!ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx))
+        {ctx.Response.StatusCode=403;return;}
         // Reject cross-origin Blazor negotiation and WebSocket connections.
         if (ctx.Request.Headers.TryGetValue("Origin", out var origin) &&
             (!Uri.TryCreate(origin.ToString(), UriKind.Absolute, out var uri) ||
