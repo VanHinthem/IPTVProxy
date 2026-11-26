@@ -20,6 +20,7 @@ public sealed class ViewerSessions
         internal readonly CancellationTokenSource Stop=new();
         internal bool Closing;
         internal bool SinglePlayer;
+        internal string Client="";
         public CancellationToken Token {get;}
 
         internal Lease(ViewerSessions owner,int accountId,string kind,int assetId)
@@ -37,17 +38,24 @@ public sealed class ViewerSessions
             }
         }
     }
-    // Legacy bootstrap account is treated as one player unless explicitly overridden.
-    public static bool SinglePlayerHandoff(IConfiguration config,string username)=>
-        config.GetValue("Playback:SingleViewerChannelSwitch",true) &&
-        (config["Playback:SinglePlayerAccounts"]??config["Accounts:IptvName"]??"viewer")
-            .Split(',',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries).Contains(username,StringComparer.Ordinal);
-    public int Count(int accountId){lock(gate)return active.Values.Where(x=>x.AccountId==accountId).Select(x=>x.SinglePlayer&&x.Kind=="live"?$"live:{x.AssetId}":x.Id.ToString()).Distinct().Count();}
+    // Xtream has no player-session identifier. Use a best-effort client key;
+    // never trust arbitrary forwarded headers here.
+    public static string ClientKey(HttpContext ctx)
+    {
+        var ip=ctx.Connection.RemoteIpAddress;
+        if(ip?.IsIPv4MappedToIPv6==true)ip=ip.MapToIPv4();
+        var agent=ctx.Request.Headers.UserAgent.ToString();
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes((ip?.ToString()??"unknown")+"\n"+agent)));
+    }
+    private static object LogicalKey(Lease x)=>x.SinglePlayer&&x.Kind=="live"
+        ? (object)(x.Client,x.Kind,x.AssetId) : x.Id;
+    public int Count(int accountId){lock(gate)return active.Values.Where(x=>x.AccountId==accountId).Select(LogicalKey).Distinct().Count();}
     public Snapshot[] List()
     {
         lock(gate)return active.Values.Select(x=>new Snapshot(x.Id,x.AccountId,x.Kind,x.AssetId,x.Started,x.ProviderId,x.SourceId,Interlocked.Read(ref x.Bytes))).ToArray();
     }
-    public async Task<Lease?> Acquire(int accountId,int limit,string kind,int assetId,CancellationToken ct,bool allowHandoff=false)
+    public async Task<Lease?> Acquire(int accountId,int limit,string kind,int assetId,CancellationToken ct,bool allowHandoff=false,string client="")
     {
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
@@ -58,22 +66,25 @@ public sealed class ViewerSessions
             {
                 if(timeout.IsCancellationRequested)return null;
                 var owned=active.Values.Where(x=>x.AccountId==accountId).ToArray();
-                // Count a bounded overlap of same-channel live requests as one logical viewer.
-                // Different assets and VOD still require handoff or a free slot.
-                var sameLive=allowHandoff&&limit==1&&kind=="live"&&owned.Length<2&&owned.Length>0&&owned.All(x=>!x.Closing&&x.Kind==kind&&x.AssetId==assetId);
-                if(owned.Length<limit||sameLive)
+                var matching=owned.Where(x=>x.SinglePlayer&&x.Client==client&&!x.Closing).ToArray();
+                var sameLive=allowHandoff&&kind=="live"&&matching.Count(x=>x.Kind==kind&&x.AssetId==assetId) is >0 and <2;
+                var used=owned.Select(LogicalKey).Distinct().Count();
+                var sameVod=allowHandoff&&kind!="live"&&matching.Any(x=>x.Kind==kind&&x.AssetId==assetId);
+                if(!sameVod&&(used<limit||sameLive))
                 {
-                    var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff&&limit==1};active.Add(lease.Id,lease);return lease;
+                    var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff,Client=client};active.Add(lease.Id,lease);return lease;
                 }
-                // Capture the current signal BEFORE cancellation: releasing the old
-                // lease may run inline in a cancellation callback.
+                // Capture signal before cancellation, including inline release.
                 wait=changed.Task;
-                if(allowHandoff&&limit==1)
+                if(allowHandoff)
                 {
-                    foreach(var previous in owned.Where(x=>!x.Closing))
+                    var sameAsset=matching.Where(x=>x.Kind==kind&&x.AssetId==assetId).ToArray();
+                    // A same-client seek replaces its old VOD request. At capacity,
+                    // only a single unambiguous logical session may be handed off.
+                    var replace=sameVod?sameAsset:
+                        sameAsset.Length==0&&matching.Select(LogicalKey).Distinct().Count()==1?matching:Array.Empty<Lease>();
+                    foreach(var previous in replace)
                     {
-                        // Never restart an active upstream just because a third duplicate arrived.
-                        if(kind=="live"&&previous.Kind==kind&&previous.AssetId==assetId)continue;
                         previous.Closing=true;previous.Stop.Cancel();
                     }
                 }
