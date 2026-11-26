@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IPTVProxy.Providers;
 
-public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, ViewerAccounts accounts, ILogger<LivePlayback> log, IConfiguration config, ProviderConnectionCoordinator capacity)
+public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog, IDbContextFactory<CatalogDb> factory, ViewerAccounts accounts, ILogger<LivePlayback> log, IConfiguration config, ProviderConnectionCoordinator capacity, ViewerSessions viewers)
 {
     private readonly object gate = new();
     private readonly Dictionary<int, Session> sessions = new();
@@ -49,6 +49,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         log.LogInformation("Playback requested: stream {StreamId}", id);
         var access=await accounts.Authenticate(username,password,ctx.RequestAborted);
         if (access is null) { ctx.Response.StatusCode = 401; return; }
+        var publicId=id;
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
         if (id > ManagedPublication.PublicOffset)
         {
@@ -80,10 +81,11 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         if (stream is null) { ctx.Response.StatusCode = 404; return; }
         var provider = await db.Providers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stream.ProviderId && x.Enabled, ctx.RequestAborted);
         if (provider is null) { ctx.Response.StatusCode = 404; return; }
+        using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,"live",publicId,ctx.RequestAborted);
+        if(viewer is null){ctx.Response.StatusCode=503;return;}
+        viewer.Bind(provider.Id,id);
         Session session;
         bool start = false;
-        var allowSwitch = provider.ConnectionLimit == 1 &&
-            config.GetValue("Playback:SingleViewerChannelSwitch", true);
         using var switchTimeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
         switchTimeout.CancelAfter(TimeSpan.FromSeconds(5));
         while (true)
@@ -116,13 +118,6 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                         break;
                     }
                     var previous = occupied.FirstOrDefault(s => s.Closing);
-                    if (previous is null && allowSwitch)
-                    {
-                        previous = occupied[0];
-                        log.LogInformation("Single-viewer channel switch: stream {Previous} to {Next}", previous.Id, id);
-                        previous.Closing = true;
-                        previous.Stop.Cancel();
-                    }
                     if (previous is null)
                     {
                         log.LogWarning("Provider {ProviderId} connection limit reached", provider.Id);
@@ -166,6 +161,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeout.CancelAfter(TimeSpan.FromSeconds(20));
                 await ctx.Response.Body.WriteAsync(output.AsMemory(0, read.Count), timeout.Token);
+                viewer.AddBytes(read.Count);
             }
             if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 502;
         }
