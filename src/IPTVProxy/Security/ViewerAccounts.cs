@@ -13,7 +13,8 @@ public sealed class ViewerAccounts(IDbContextFactory<CatalogDb> factory, IConfig
 {
     private readonly MemoryCache authCache=new(new MemoryCacheOptions{SizeLimit=256});
     private readonly byte[] cacheKey=RandomNumberGenerator.GetBytes(32);
-    private readonly SemaphoreSlim authGate=new(1,1);
+    private readonly object authGate=new();
+    private long authGeneration;
     private readonly PasswordHasher<string> hasher = new();
     private readonly string dummyHash = new PasswordHasher<string>().HashPassword("dummy", Guid.NewGuid().ToString("N"));
     public sealed record Account(int Id,string Username,bool Enabled,int MaxStreams,bool AllowRemote,int PlaylistId);
@@ -48,19 +49,20 @@ public sealed class ViewerAccounts(IDbContextFactory<CatalogDb> factory, IConfig
             var id=await Scalar(c,tx,"SELECT last_insert_rowid()",ct);
             await Execute(c,tx,"INSERT INTO ViewerPlaylistAssignments(AccountId,PlaylistId,IsDefault) VALUES($0,$1,1)",ct,id,playlist);
         }
-        await authGate.WaitAsync(ct);
-        try{await tx.CommitAsync(ct);authCache.Clear();}
-        finally{authGate.Release();}
+        await tx.CommitAsync(ct);
+        lock(authGate){authGeneration++;authCache.Clear();}
     }
 
     public async Task<Access?> Authenticate(string? name,string? password,CancellationToken ct)
     {
         if(string.IsNullOrEmpty(name)||name.Length>256||string.IsNullOrEmpty(password)||password.Length>512)return null;
         var key=Convert.ToHexString(HMACSHA256.HashData(cacheKey,Encoding.UTF8.GetBytes(name+"\0"+password)));
-        await authGate.WaitAsync(ct);
-        try
+        long generation;
+        lock(authGate)
         {
-        if(authCache.TryGetValue<Access>(key,out var cached))return cached;
+            if(authCache.TryGetValue<Access>(key,out var cached))return cached;
+            generation=authGeneration;
+        }
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
         var c=(SqliteConnection)db.Database.GetDbConnection();
         Account? account=null;Playlist? playlist=null;string hash=dummyHash;
@@ -80,10 +82,11 @@ public sealed class ViewerAccounts(IDbContextFactory<CatalogDb> factory, IConfig
         var valid=hasher.VerifyHashedPassword(name,hash,password)!=PasswordVerificationResult.Failed;
         if(!valid||account is null||playlist is null||!account.Enabled||!playlist.Enabled)return null;
         var access=new Access(account,playlist,await ReadEntries(c,playlist.Id,ct));
-        authCache.Set(key,access,new MemoryCacheEntryOptions{Size=1,AbsoluteExpirationRelativeToNow=TimeSpan.FromSeconds(15)});
-        return access;
+        lock(authGate)
+        {
+            if(generation==authGeneration)authCache.Set(key,access,new MemoryCacheEntryOptions{Size=1,AbsoluteExpirationRelativeToNow=TimeSpan.FromSeconds(15)});
         }
-        finally{authGate.Release();}
+        return access;
     }
 
     private static async Task<Entry[]> ReadEntries(SqliteConnection c,int id,CancellationToken ct)
@@ -140,9 +143,8 @@ public sealed class ViewerAccounts(IDbContextFactory<CatalogDb> factory, IConfig
         }
         await Execute(c,tx,"UPDATE ViewerPlaylistAssignments SET IsDefault=0 WHERE AccountId=$0",ct,id);
         await Execute(c,tx,"INSERT INTO ViewerPlaylistAssignments(AccountId,PlaylistId,IsDefault) VALUES($0,$1,1) ON CONFLICT(AccountId,PlaylistId) DO UPDATE SET IsDefault=1",ct,id,playlistId);
-        await authGate.WaitAsync(ct);
-        try{await tx.CommitAsync(ct);authCache.Clear();}
-        finally{authGate.Release();}
+        await tx.CommitAsync(ct);
+        lock(authGate){authGeneration++;authCache.Clear();}
     }
     public async Task SavePlaylist(int id,string name,bool enabled,bool allPublished,IEnumerable<Entry> entries,CancellationToken ct)
     {
@@ -164,8 +166,7 @@ public sealed class ViewerAccounts(IDbContextFactory<CatalogDb> factory, IConfig
         }
         await Execute(c,tx,"DELETE FROM ViewerPlaylistEntries WHERE PlaylistId=$0",ct,id);
         foreach(var e in rows)await Execute(c,tx,"INSERT INTO ViewerPlaylistEntries(PlaylistId,Kind,CategoryId,SortOrder) VALUES($0,$1,$2,$3)",ct,id,e.Kind,e.CategoryId,e.SortOrder);
-        await authGate.WaitAsync(ct);
-        try{await tx.CommitAsync(ct);authCache.Clear();}
-        finally{authGate.Release();}
+        await tx.CommitAsync(ct);
+        lock(authGate){authGeneration++;authCache.Clear();}
     }
 }
