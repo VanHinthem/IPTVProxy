@@ -1,0 +1,52 @@
+@page "/users"
+@using IPTVProxy.Security
+@using Microsoft.AspNetCore.Components.Web
+@inject ViewerAccounts Store
+@inject IConfiguration Config
+<PageTitle>Gebruikers — IPTVProxy</PageTitle>
+<h1>Gebruikers</h1>
+<p><a href="/">Providers</a> · <a href="/playlists">Playlists</a></p>
+<p>Xtream-server: @(Config["PublicBaseUrl"] ?? "http://localhost:8080")</p>
+<p class="muted">Instellingen worden opgeslagen in SQLite. Handhaving via de IPTV-endpoints volgt in dit werkblok.</p>
+<button disabled="@busy" @onclick="New">Nieuwe gebruiker</button>
+<table><thead><tr><th>Gebruiker</th><th>Playlist</th><th>Limiet</th><th>Extern</th><th>Status</th><th></th></tr></thead><tbody>
+@foreach(var a in accounts)
+{
+    <tr><td>@a.Username</td><td>@(playlists.FirstOrDefault(p=>p.Id==a.PlaylistId)?.Name??"Onbekend")</td><td>@a.MaxStreams</td><td>@(a.AllowRemote?"Ja":"Nee")</td><td>@(a.Enabled?"Actief":"Uit")</td><td><button disabled="@busy" @onclick="()=>Edit(a)">Bewerken</button></td></tr>
+}
+</tbody></table>
+@if(editing)
+{
+    <fieldset disabled="@busy">
+        <legend>@(id==0?"Nieuwe gebruiker":"Gebruiker wijzigen")</legend>
+        <label>Gebruikersnaam <input @bind="name" autocomplete="off" maxlength="128" /></label>
+        <label>Wachtwoord <input type="password" @bind="password" autocomplete="new-password" maxlength="512" /></label>
+        @if(id!=0){<small>Laat wachtwoord leeg om het huidige te behouden.</small>}
+        <label>Standaardplaylist <select @bind="playlistId"><option value="0">Selecteer</option>@foreach(var p in playlists.Where(p=>p.Enabled)){<option value="@p.Id">@p.Name</option>}</select></label>
+        <label>Max. streams <input type="number" min="1" max="64" @bind="limit" /></label>
+        <label><input type="checkbox" @bind="enabled" /> Actief</label>
+        <label><input type="checkbox" @bind="remote" /> Externe toegang</label>
+        <button @onclick="Save">Opslaan</button><button @onclick="Cancel">Annuleren</button>
+    </fieldset>
+}
+<p role="status">@status</p>
+@code{
+    private List<ViewerAccounts.Account> accounts=[];
+    private List<ViewerAccounts.Playlist> playlists=[];
+    private bool busy,editing,enabled=true,remote;
+    private int id,limit=1,playlistId;
+    private string name="",password="",status="";
+    protected override async Task OnInitializedAsync()=>await Load();
+    private async Task Load(){accounts=await Store.Accounts(CancellationToken.None);playlists=await Store.Playlists(CancellationToken.None);}
+    private void New(){id=0;name=password="";limit=1;enabled=true;remote=false;playlistId=playlists.FirstOrDefault(p=>p.Enabled&&p.AllPublished)?.Id??playlists.FirstOrDefault(p=>p.Enabled)?.Id??0;editing=true;status="";}
+    private void Edit(ViewerAccounts.Account a){id=a.Id;name=a.Username;password="";limit=a.MaxStreams;enabled=a.Enabled;remote=a.AllowRemote;playlistId=a.PlaylistId;editing=true;status="";}
+    private void Cancel(){editing=false;password="";}
+    private async Task Save()
+    {
+        if(busy)return;busy=true;
+        try{await Store.SaveAccount(id,name,password,enabled,limit,remote,playlistId,CancellationToken.None);Cancel();await Load();status="Gebruiker opgeslagen.";}
+        catch(ArgumentException ex){status=ex.Message;}
+        catch{status="Opslaan mislukt.";}
+        finally{password="";busy=false;}
+    }
+}
