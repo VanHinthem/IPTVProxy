@@ -24,6 +24,8 @@ public sealed class ViewerSessions(ILogger<ViewerSessions>? log=null)
         internal string Client="";
         internal string Network="";
         internal string Agent="";
+        internal string GroupClient="";
+        internal HashSet<string> Aliases=new(StringComparer.Ordinal);
         public CancellationToken Token {get;}
 
         internal Lease(ViewerSessions owner,int accountId,string kind,int assetId)
@@ -69,7 +71,7 @@ public sealed class ViewerSessions(ILogger<ViewerSessions>? log=null)
         return $"{family}/{Short(Fingerprint(value))}/len:{value.Length}";
     }
     private static object LogicalKey(Lease x)=>x.SinglePlayer&&x.Kind=="live"
-        ? (object)(x.Client,x.Kind,x.AssetId) : x.Id;
+        ? (object)(x.GroupClient,x.Kind,x.AssetId) : x.Id;
     public int Count(int accountId){lock(gate)return active.Values.Where(x=>x.AccountId==accountId).Select(LogicalKey).Distinct().Count();}
     public Snapshot[] List()
     {
@@ -80,6 +82,8 @@ public sealed class ViewerSessions(ILogger<ViewerSessions>? log=null)
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         var waitingLogged=false;
+        var inheritedAliases=new HashSet<string>(StringComparer.Ordinal){client};
+        var groupClient=!unresolvedProxy&&!string.IsNullOrEmpty(network)?network:client;
         while(!timeout.IsCancellationRequested)
         {
             Task wait;
@@ -87,14 +91,18 @@ public sealed class ViewerSessions(ILogger<ViewerSessions>? log=null)
             {
                 if(timeout.IsCancellationRequested)return null;
                 var owned=active.Values.Where(x=>x.AccountId==accountId).ToArray();
-                var matching=owned.Where(x=>x.SinglePlayer&&x.Client==client&&!x.Closing).ToArray();
+                var matching=owned.Where(x=>x.SinglePlayer&&!x.Closing&&(x.Aliases.Contains(client)||
+                    (x.Kind==kind&&x.AssetId==assetId&&x.GroupClient==groupClient))).ToArray();
                 var liveMatches=allowHandoff&&kind=="live"?matching.Count(x=>x.Kind==kind&&x.AssetId==assetId):0;
                 var sameLive=liveMatches==1;
                 var used=owned.Select(LogicalKey).Distinct().Count();
                 var sameVod=allowHandoff&&kind!="live"&&matching.Any(x=>x.Kind==kind&&x.AssetId==assetId);
                 if(!sameVod&&liveMatches<2&&(used<limit||sameLive))
                 {
-                    var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff,Client=client,Network=network,Agent=agent};active.Add(lease.Id,lease);
+                    foreach(var peer in matching.Where(x=>x.Kind==kind&&x.AssetId==assetId))inheritedAliases.UnionWith(peer.Aliases);
+                    var lease=new Lease(this,accountId,kind,assetId){SinglePlayer=allowHandoff,Client=client,Network=network,Agent=agent,GroupClient=groupClient,Aliases=new(inheritedAliases,StringComparer.Ordinal)};
+                    foreach(var peer in matching.Where(x=>x.Kind==kind&&x.AssetId==assetId))peer.Aliases.UnionWith(inheritedAliases);
+                    active.Add(lease.Id,lease);
                     log?.LogInformation("Viewer admission granted: account {AccountId}, limit {Limit}, used {Used}, kind {Kind}, asset {Asset}, client {Client}, network {Network}, agent {Agent}, unresolved proxy {Unresolved}, range {Range}, overlap {Overlap}",accountId,limit,active.Values.Where(x=>x.AccountId==accountId).Select(LogicalKey).Distinct().Count(),kind,assetId,Short(client),Short(network),agent,unresolvedProxy,hasRange,sameLive);
                     return lease;
                 }
@@ -118,6 +126,7 @@ public sealed class ViewerSessions(ILogger<ViewerSessions>? log=null)
                 }
                 foreach(var previous in replace)
                 {
+                    inheritedAliases.UnionWith(previous.Aliases);
                     previous.Closing=true;previous.Stop.Cancel();
                 }
             }
