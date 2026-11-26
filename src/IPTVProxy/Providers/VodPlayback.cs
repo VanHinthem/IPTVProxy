@@ -1,23 +1,28 @@
 using IPTVProxy.Security;
 namespace IPTVProxy.Providers;
-public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts accounts,IHttpClientFactory clients,ProviderConnectionCoordinator capacity,ILogger<VodPlayback> log)
+public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts accounts,IHttpClientFactory clients,VodRequestCoordinator requests,IConfiguration config,ILogger<VodPlayback> log)
 {
     public async Task Play(HttpContext ctx,string username,string password,int id,string kind,string extension)
     {
         log.LogInformation("VOD request: {Kind} {Id}, method {Method}, range {HasRange}",kind,id,ctx.Request.Method,ctx.Request.Headers.ContainsKey("Range"));
         if(!accounts.IptvValid(username,password)){log.LogWarning("VOD authentication rejected");ctx.Response.StatusCode=401;return;}
         var ct=ctx.RequestAborted;
+        bool replaced=false;
         try
         {
             var media=await vod.Resolve(id,kind,ct);
             if(media is null){log.LogWarning("VOD item unavailable: {Kind} {Id}",kind,id);ctx.Response.StatusCode=404;return;}
             if(extension.Length>0&&!string.Equals(extension,media.Extension,StringComparison.OrdinalIgnoreCase))log.LogInformation("VOD requested extension differs; using catalog extension {Extension}",media.Extension);
-            using var lease=capacity.TryReserve(media.Provider.Id,media.Provider.ConnectionLimit);
+            var key=new VodRequestCoordinator.Key(media.Provider.Id,kind,id,username,ctx.Connection.RemoteIpAddress?.ToString()??"unknown");
+            using var lease=await requests.Acquire(key,media.Provider.ConnectionLimit,config.GetValue("Playback:SingleViewerChannelSwitch",true)&&media.Provider.ConnectionLimit==1,ct);
             if(lease is null){log.LogWarning("VOD capacity exhausted for provider {ProviderId}, limit {Limit}",media.Provider.Id,media.Provider.ConnectionLimit);ctx.Response.StatusCode=503;return;}
+            using var stop=CancellationTokenSource.CreateLinkedTokenSource(ct,lease.Token);
+            using var registration=lease.Token.Register(()=>{replaced=true;});
+            var streamCt=stop.Token;
             var credentials=live.Credentials(media.Provider);
             var uri=new Uri(LiveCatalog.ValidateBase(media.Provider.BaseUrl),kind+"/"+Uri.EscapeDataString(credentials.Username)+"/"+Uri.EscapeDataString(credentials.Password)+"/"+media.SourceId+"."+media.Extension);
             using var client=clients.CreateClient("provider");
-            using var startup=CancellationTokenSource.CreateLinkedTokenSource(ct);startup.CancelAfter(TimeSpan.FromSeconds(30));
+            using var startup=CancellationTokenSource.CreateLinkedTokenSource(streamCt);startup.CancelAfter(TimeSpan.FromSeconds(30));
             for(int hop=0;;hop++)
             {
                 using var req=new HttpRequestMessage(ctx.Request.Method=="HEAD"?HttpMethod.Head:HttpMethod.Get,uri);
@@ -42,11 +47,11 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts ac
                 if(code==416){ctx.Response.ContentLength=0;return;}
                 ctx.Response.ContentType=type??"application/octet-stream";ctx.Response.ContentLength=response.Content.Headers.ContentLength;
                 if(ctx.Request.Method=="HEAD")return;
-                await using var stream=await response.Content.ReadAsStreamAsync(ct);
+                await using var stream=await response.Content.ReadAsStreamAsync(streamCt);
                 var buffer=new byte[65536];bool first=true;
                 while(true)
                 {
-                    using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(30));
+                    using var timeout=CancellationTokenSource.CreateLinkedTokenSource(streamCt);timeout.CancelAfter(TimeSpan.FromSeconds(30));
                     var n=await stream.ReadAsync(buffer,timeout.Token);if(n==0)break;
                     if(first){log.LogInformation("VOD first bytes: {Kind} {Id}, {Count}",kind,id,n);first=false;}
                     await ctx.Response.Body.WriteAsync(buffer.AsMemory(0,n),timeout.Token);
@@ -56,7 +61,8 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts ac
         }
         catch(Exception ex)
         {
-            if(!ct.IsCancellationRequested)log.LogWarning("VOD playback failed: {Kind} {Id} {ErrorType}",kind,id,ex.GetType().Name);
+            if(replaced)log.LogInformation("VOD request superseded by another request for same item: {Kind} {Id}",kind,id);
+            else if(!ct.IsCancellationRequested)log.LogWarning("VOD playback failed: {Kind} {Id} {ErrorType}",kind,id,ex.GetType().Name);
             if(!ctx.Response.HasStarted){ctx.Response.ContentLength=null;ctx.Response.Headers.Remove("Content-Range");ctx.Response.StatusCode=502;}else ctx.Abort();
         }
         finally{log.LogInformation("VOD request ended: {Kind} {Id}, HTTP {Status}, aborted {Aborted}",kind,id,ctx.Response.StatusCode,ct.IsCancellationRequested);}

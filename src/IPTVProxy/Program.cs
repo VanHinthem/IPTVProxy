@@ -25,6 +25,7 @@ builder.Services.AddSingleton<LivePlayback>();
 builder.Services.AddSingleton<ProviderConnectionCoordinator>();
 builder.Services.AddSingleton<VodCatalog>();
 builder.Services.AddSingleton<VodPlayback>();
+builder.Services.AddSingleton<VodRequestCoordinator>();
 builder.Services.AddSingleton<ProviderEpg>();
 builder.Services.AddSingleton<ArtworkService>();
 builder.Services.AddSingleton<XmlTvGuide>();
