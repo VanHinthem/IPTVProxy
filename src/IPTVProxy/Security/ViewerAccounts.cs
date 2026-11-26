@@ -122,8 +122,8 @@ public sealed class ViewerAccounts(IDbContextFactory<CatalogDb> factory, IConfig
         name=name.Trim();
         if(name.Length is <1 or >128||name.Any(c=>!char.IsAsciiLetterOrDigit(c)&&c!='_'&&c!='-'&&c!='.')||name==(config["Accounts:AdminName"]??"admin")||maxStreams is <1 or >64)
             throw new ArgumentException("Ongeldige gebruikersnaam of streamlimiet.");
-        if((id==0||!string.IsNullOrEmpty(password))&&(password is null||password.Length is <12 or >512||password.Any(c=>!char.IsAsciiLetterOrDigit(c)&&c!='_'&&c!='-'&&c!='.')||password==config["Accounts:AdminPassword"]))
-            throw new ArgumentException("Gebruik een afzonderlijk URL-veilig wachtwoord van minimaal 12 tekens (letters, cijfers, punt, streepje of underscore).");
+        if((id==0||!string.IsNullOrEmpty(password))&&(password is null||password.Length is <8 or >512||password.Any(c=>char.IsWhiteSpace(c)||char.IsControl(c)||"/\\?#%&+=".Contains(c))||password==config["Accounts:AdminPassword"]))
+            throw new ArgumentException("Gebruik een afzonderlijk wachtwoord van minimaal 8 tekens, zonder spaties of de URL-tekens / \\ ? # % & + =.");
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
         var c=(SqliteConnection)db.Database.GetDbConnection();using var tx=c.BeginTransaction();
         if(await Scalar(c,tx,"SELECT count(*) FROM ViewerPlaylists WHERE Id=$0 AND Enabled=1",ct,playlistId)!=1)
