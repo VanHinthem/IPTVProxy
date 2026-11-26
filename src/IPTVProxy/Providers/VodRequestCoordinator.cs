@@ -42,9 +42,8 @@ public sealed class VodRequestCoordinator(ProviderConnectionCoordinator capacity
                     var lease=new Lease(this,key,slot);active.Add(lease);return lease;
                 }
                 var previous=allowReplacement?active.FirstOrDefault(x=>x.Identity==key):null;
-                if(previous is null)return null;
-                if(!previous.Closing){previous.Closing=true;previous.Stop.Cancel();}
-                release=previous.Released.Task;
+                if(previous is null)release=Task.Delay(100,timeout.Token);
+                else{if(!previous.Closing){previous.Closing=true;previous.Stop.Cancel();}release=previous.Released.Task;}
             }
             try{await release.WaitAsync(timeout.Token);}
             catch(OperationCanceledException){return null;}

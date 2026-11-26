@@ -1,6 +1,6 @@
-# Projectstatus — 2026-11-25
+# Projectstatus — 2026-11-26
 
-Werkblok #1 afgerond op 25 november 2026; PR #5 gemerged naar main (7c0b78c). Werkblok #2 afgerond; PR #6 gemerged naar main (d0ce164). Volgend werkblok: #3 films en series. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
+Werkblok #1 afgerond op 25 november 2026; PR #5 gemerged naar main (7c0b78c). Werkblok #2 afgerond; PR #6 gemerged naar main (d0ce164). Werkblok #3 gemerged; actief werkblok #4 betrouwbaarheid. Zie [MVP](MVP.md) en [functioneel ontwerp](FUNCTIONAL_DESIGN.md).
 
 NAS en Nginx HTTPS werken. IPTV-subdomein DNS-only om vertraging via Cloudflare-proxy te vermijden. VLC speelt direct af; Nuvio playback en single-viewer zenderwisseling bevestigd. Twee geautoriseerde providers geïmporteerd (86.514 livekanalen). HTTP/HTTPS upstream en maximaal vijf gecontroleerde redirects ondersteund.
 
@@ -72,3 +72,10 @@ NAS 985dea4: interactive circuit indicator active, other pages work, correct ima
 
 ## Afsluitende acceptatie werkblok 3 — 26 november 2026
 NAS 3e1df2b: gebruiker bevestigt dat intervalwijziging en handmatige importfeedback nu werken na toevoeging van Blazor Web namespace. Increment 1 en 2 eerder functioneel geaccepteerd; increment 3 beheer geaccepteerd. Afsluitende wijziging: gefilterde snelkoppelingen naar nieuwe providergroepen, kanaalbronnen, logische beschikbaarheid, film-/seriecategorieën en titels; importhistorie herladen bij gedetecteerde voltooiing. Regressiechecks voor planning, actieve importdeduplicatie, baseline, toevoeging/verwijdering, terugkeer, filter, rollback en foutregistratie. Automatische uitvoering en echte providerwijzigingen over langere tijd nog niet afzonderlijk bevestigd; geen gefingeerde NAS-acceptatie. SuperTV serie niet afzonderlijk bevestigd, Arvio niet gevalideerd; geen afleveringhistorie of handmatige eigen-groepshistorie. PR #8 blijft open, merge alleen na expliciet akkoord. #4 is volgende werkblok; #7 bestaande live-verfijningen.
+
+
+## Start werkblok 4 — 26 november 2026
+PR #8 gemerged naar main d2ab36b676dcc15eb55c0c6cf5f3041515713a4d; CI 45797517818 en Development image 45797517945 groen. Vier increments akkoord: accounts/playlists/sessies/capaciteit; herstel/failover; dashboard; operationele afronding. Eén branch feature/mvp-4-reliability en één PR, merge na expliciet akkoord. Implementatie en NAS-acceptatie nog niet afgerond.
+
+## Werkblok 4 — increment 1 functionele NAS-acceptatie (26 november 2026)
+Gebruiker bevestigt A (accounts, wachtwoordwijziging, uitschakelen, eigen playlists en catalogus/EPG), B (gedeelde live-upstream, meerdere providers, zappen zonder andere account te verdringen, logische accountlimieten en gezamenlijke live/VOD-providerlimiet inclusief HTTP 503 bij uitputting), C (lokale account via directe LAN-URL, externe account via HTTPS, lokale account extern geweigerd, beheer lokaal toegestaan en extern geweigerd) en D (persistentie en playback na restart). Windows-speler gebruikt probe plus libvlc; overlap wordt als één logische stream behandeld. Clientidentiteit blijft heuristisch: hetzelfde IP en dezelfde User-Agent, of overlappende aanvragen voor dezelfde asset achter hetzelfde IP, zijn niet betrouwbaar onderscheidbaar. Geen harde apparaatlimiet claimen. NAS gebruikt DNS-only, publieke hostname resolveert ook thuis naar publiek IP; lokale directe URL werkt, split DNS optioneel. NPM bereikt IPTVProxy via gedeeld Docker-netwerk en tijdelijk intern IP; beide endpointadressen zijn nog dynamisch. Containernaam werkt vanuit curl maar niet via Nginx-hostconfiguratie; precieze resolveroorzaak niet vastgesteld. Stabiele proxynetwerkconfiguratie en recreate-test nog open; increment 1 functioneel geaccepteerd, technische afronding nog niet. Geen secrets, persoonlijke adressen of kijkgegevens in Git. PR #9 blijft draft; geen merge.

@@ -4,6 +4,7 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using IPTVProxy.Data;
+using IPTVProxy.Security;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -164,7 +165,7 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
     }
     // Open a stable file handle before releasing the gate; later atomic replacement
     // cannot change the bytes already being downloaded by another client.
-    public async Task<FileStream?> OpenGuideAsync(CancellationToken ct)
+    public async Task<FileStream?> OpenGuideAsync(CancellationToken ct,ViewerAccounts.Access? access=null)
     {
         await publicationGate.WaitAsync(ct);
         string? temporary=null;
@@ -174,6 +175,19 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
             await using var db=await factory.CreateDbContextAsync(ct);
             var managed=await ManagedPublication.IsEnabled(db,ct);
             var path=Path.Combine(cacheDirectory,managed?"managed.xml":"raw.xml");
+            if(access is not null&&!access.Playlist.AllPublished)
+            {
+                // Restricted guides use a temporary file, never the shared full-catalog cache.
+                var restricted=await BuildMapAsync(db,managed,ct,access);
+                temporary=Path.Combine(cacheDirectory,Guid.NewGuid().ToString("N")+".tmp");
+                await using(var output=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None,65536,FileOptions.Asynchronous))
+                {
+                    await GenerateAsync(db,restricted,output,ct);
+                    await output.FlushAsync(ct);
+                }
+                var result=new FileStream(temporary,FileMode.Open,FileAccess.Read,FileShare.Read|FileShare.Delete,65536,FileOptions.Asynchronous|FileOptions.SequentialScan|FileOptions.DeleteOnClose);
+                temporary=null;return result;
+            }
             // Include membership and EPG mapping, not only the selected playback source.
             // Hash the relevant catalog metadata to detect changes without relying on UI hooks.
             var map=await BuildMapAsync(db,managed,ct);
@@ -236,7 +250,7 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         await using(var reader=await cmd.ExecuteReaderAsync(ct))while(await reader.ReadAsync(ct))available.Add((reader.GetInt32(0),reader.GetString(1)));
         return (published.Count(x=>sources[x.ChannelId].Any(s=>available.Contains((s.ProviderId,s.EpgId)))),published.Count);
     }
-    private static async Task<List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)>> BuildMapAsync(CatalogDb db,bool managed,CancellationToken ct)
+    private static async Task<List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)>> BuildMapAsync(CatalogDb db,bool managed,CancellationToken ct,ViewerAccounts.Access? access=null)
     {
         var sources=await ManagedPublication.Candidates(db).ToListAsync(ct);
         var map=new List<(string Id,string Name,ManagedPublication.Candidate[] Candidates)>();
@@ -244,12 +258,12 @@ public sealed class XmlTvGuide(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         {
             var published=await ManagedPublication.ListAsync(db,null,ct,false);
             var lookup=sources.ToLookup(s=>s.ChannelId);
-            foreach(var row in published.DistinctBy(x=>x.ChannelId))
+            foreach(var row in published.Where(x=>access is null||access.Allows("live",x.GroupId)).DistinctBy(x=>x.ChannelId))
                 map.Add(("iptvproxy."+row.ChannelId,row.Name,lookup[row.ChannelId].Where(s=>s.EpgId!="").OrderBy(s=>s.Priority).ThenBy(s=>s.ProviderId).ToArray()));
         }
         else
         {
-            foreach(var s in sources.Where(s=>s.EpgId!=""))map.Add(("iptvproxy.raw."+s.StreamId,s.Name,[s]));
+            foreach(var s in sources.Where(s=>s.EpgId!=""&&(access is null||access.Allows("raw",s.CategoryId))))map.Add(("iptvproxy.raw."+s.StreamId,s.Name,[s]));
         }
         return map;
     }

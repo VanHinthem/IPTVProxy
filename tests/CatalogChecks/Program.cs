@@ -1,4 +1,8 @@
 using IPTVProxy.Data;
+using IPTVProxy.Security;
+using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Http;
+using System.Net;
 using IPTVProxy.Providers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.Sqlite;
@@ -128,7 +132,104 @@ await history.RecordFailure(1,"movie",CatalogHistory.Now(),"FixtureFailure",ct);
 state=(await history.States(ct)).Single(x=>x.Kind=="movie");
 Check(state.Success==false&&state.LastSuccess!=null&&state.LastAttempt!=null&&CatalogHistory.Next(state,0)==state.LastAttempt.Value+900,"failure retry retains last success");
 Check((await history.Changes(1,"movie","","","",0,ct)).Count==4,"failure adds no phantom changes");
-Console.WriteLine("Catalog checks passed.");
+var viewerConfig=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+    ["Accounts:IptvName"]="fixture-viewer",["Accounts:IptvPassword"]="fixture-password-123",
+    ["Network:LocalNetworks"]="192.168.50.0/24,::1/128",["Network:TrustedProxies"]="172.20.0.1"
+}).Build();
+var viewersStore=new ViewerAccounts(new FixtureFactory(options),viewerConfig);
+await viewersStore.Bootstrap(ct);
+var initial=await viewersStore.Authenticate("fixture-viewer","fixture-password-123",ct);
+Check(initial is not null&&initial.Playlist.AllPublished&&initial.Account.AllowRemote,"bootstrap preserves full publication and legacy access");
+var original=initial!;
+await viewersStore.SavePlaylist(0,"Limited",true,false,[new("live",first.GroupId,0),new("movie",1,1)],ct);
+var limited=(await viewersStore.Playlists(ct)).Single(x=>x.Name=="Limited");
+await viewersStore.SaveAccount(0,"parents","Test!42@",true,1,false,limited.Id,ct);
+var restricted=await viewersStore.Authenticate("parents","Test!42@",ct);
+Check(restricted is not null&&restricted.Allows("live",first.GroupId)&&restricted.Allows("movie",1)&&!restricted.Allows("series",1)&&!restricted.Allows("movie",2),"playlist kind and category isolation");
+Check(await viewersStore.Authenticate("parents","wrong",ct) is null,"wrong password rejected");
+await viewersStore.SaveAccount(original.Account.Id,original.Account.Username,"changed-password-123",false,1,true,original.Playlist.Id,ct);
+await viewersStore.Bootstrap(ct);
+Check(await viewersStore.Authenticate(original.Account.Username,"fixture-password-123",ct) is null,"bootstrap does not restore old credentials");
+Check(await viewersStore.Authenticate(original.Account.Username,"changed-password-123",ct) is null,"disabled account rejected");
+await viewersStore.SaveAccount(original.Account.Id,original.Account.Username,null,true,1,true,original.Playlist.Id,ct);
+Check(await viewersStore.Authenticate(original.Account.Username,"changed-password-123",ct) is not null,"blank password retains hash");
+await viewersStore.SavePlaylist(limited.Id,"Limited",false,false,[],ct);
+Check(await viewersStore.Authenticate("parents","Test!42@",ct) is null,"disabled playlist rejects login");
+var viewerSessions=new ViewerSessions();
+using var viewerOne=await viewerSessions.Acquire(1,1,"live",101,ct);
+using var viewerTwo=await viewerSessions.Acquire(2,1,"live",101,ct);
+Check(viewerOne is not null&&viewerTwo is not null&&viewerSessions.List().Length==2,"independent account leases");
+viewerOne!.Bind(1,101);viewerOne.AddBytes(188);
+Check(viewerSessions.List().Single(x=>x.AccountId==1).Bytes==188,"viewer traffic tracking");
+using(var cancelled=new CancellationTokenSource())
+{
+    var pendingViewer=viewerSessions.Acquire(1,1,"movie",202,cancelled.Token);
+    Check(!pendingViewer.IsCompleted,"account limit waits");
+    cancelled.Cancel();
+    Check(await pendingViewer is null&&viewerSessions.Count(1)==1&&viewerSessions.Count(2)==1,"capacity cancellation never evicts active viewers");
+}
+var nextViewer=viewerSessions.Acquire(1,1,"series",303,ct);
+viewerOne.Dispose();
+using var successor=await nextViewer;
+Check(successor is not null&&viewerSessions.Count(2)==1,"release wakes waiting viewer without affecting other account");
+viewerOne.Dispose();
+Check(viewerSessions.Count(1)==1,"lease disposal idempotent");
+// Reproduce the exact handoff race: cancellation releases the old lease inline.
+var handoffSessions=new ViewerSessions();
+using var oldViewer=await handoffSessions.Acquire(10,1,"live",101,ct,true);
+using var independentViewer=await handoffSessions.Acquire(20,1,"live",101,ct);
+Check(oldViewer is not null&&independentViewer is not null,"handoff fixtures");
+using var releaseOnCancel=oldViewer!.Token.Register(oldViewer.Dispose);
+using var newViewer=await handoffSessions.Acquire(10,1,"live",101,ct,true);
+Check(newViewer is not null&&handoffSessions.List().Count(x=>x.AccountId==10)==2&&handoffSessions.Count(10)==1&&!oldViewer.Token.IsCancellationRequested,"same channel overlap counts once and preserves upstream");
+Check(!independentViewer!.Token.IsCancellationRequested&&handoffSessions.Count(20)==1,"handoff preserves another account sharing same channel");
+using var releaseVod= newViewer!.Token.Register(newViewer.Dispose);
+using var nextVod=await handoffSessions.Acquire(10,1,"series",11,ct,true);
+Check(nextVod is not null&&handoffSessions.Count(10)==1&&oldViewer.Token.IsCancellationRequested,"live to VOD handoff releases both overlapping requests");
+using var releaseRange=nextVod!.Token.Register(nextVod.Dispose);
+using var rangeViewer=await handoffSessions.Acquire(10,1,"series",11,ct,true);
+Check(rangeViewer is not null&&handoffSessions.Count(10)==1,"VOD range handoff");
+var clientSessions=new ViewerSessions();
+using var clientA=await clientSessions.Acquire(42,1,"live",101,ct,true,"device-a");
+using var duplicateA=await clientSessions.Acquire(42,1,"live",101,ct,true,"device-a");
+Check(clientA is not null&&duplicateA is not null&&clientSessions.Count(42)==1,"new account supports duplicate live requests");
+using(var blocked=new CancellationTokenSource())
+{
+    var secondDevice=clientSessions.Acquire(42,1,"live",102,blocked.Token,true,"device-b");
+    Check(!secondDevice.IsCompleted&&!clientA!.Token.IsCancellationRequested,"different client cannot displace viewer");
+    blocked.Cancel();
+    Check(await secondDevice is null,"different client denied at account capacity");
+}
+using var releaseClientA=clientA!.Token.Register(clientA.Dispose);
+using var releaseDuplicateA=duplicateA!.Token.Register(duplicateA.Dispose);
+using var switched=await clientSessions.Acquire(42,1,"live",102,ct,true,"device-a");
+Check(switched is not null&&clientSessions.Count(42)==1,"same client can zap on new account");
+var splitPlayer=new ViewerSessions();
+using var probe=await splitPlayer.Acquire(50,1,"live",101,ct,true,"probe","network-a");
+using var decoder=await splitPlayer.Acquire(50,1,"live",101,ct,true,"libvlc","network-a");
+Check(probe is not null&&decoder is not null&&splitPlayer.Count(50)==1,"different agents on same network and asset share one logical viewer");
+using(var denied=new CancellationTokenSource())
+{
+    var pending=splitPlayer.Acquire(50,1,"live",101,denied.Token,true,"other","network-b");
+    Check(!pending.IsCompleted,"different network must not share account slot");
+    denied.Cancel();Check(await pending is null,"different network denied");
+}
+probe!.Dispose();
+using var decoderRelease=decoder!.Token.Register(decoder.Dispose);
+using var movieProbe=await splitPlayer.Acquire(50,1,"movie",2,ct,true,"probe","network-a");
+Check(movieProbe is not null,"original probe alias can switch after initial live request ends");
+using var movieRelease=movieProbe!.Token.Register(movieProbe.Dispose);
+using var movieDecoder=await splitPlayer.Acquire(50,1,"movie",2,ct,true,"libvlc","network-a");
+Check(movieDecoder is not null&&splitPlayer.Count(50)==1,"VOD second component can replace probe");
+var network=new ClientNetwork(viewerConfig);
+var http=new DefaultHttpContext();
+http.Connection.RemoteIpAddress=IPAddress.Parse("192.168.50.4");
+Check(network.IsLocal(http),"configured LAN accepted");
+http.Items["UnresolvedProxy"]=true;
+Check(!network.IsLocal(http),"unresolved proxy fails closed");
+http.Items.Clear();http.Connection.RemoteIpAddress=IPAddress.Parse("172.20.0.1");
+Check(!network.IsLocal(http)&&ClientNetwork.TrustedProxies(viewerConfig).Length==1,"proxy is not automatically local");
+Console.WriteLine("Catalog and viewer checks passed.");
 sealed class FixtureFactory(DbContextOptions<CatalogDb> options):IDbContextFactory<CatalogDb>
 {
     public CatalogDb CreateDbContext()=>new(options);

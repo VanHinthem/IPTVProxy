@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using IPTVProxy.Data;
+using IPTVProxy.Security;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -134,46 +135,52 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         await Exec((SqliteConnection)db.Database.GetDbConnection(),null,"UPDATE VodCategories SET Selected=$0 WHERE Id=$1",ct,selected,id);
     }
     private const string Visible=VodPublication.Visible;
-    public async Task<JsonArray> List(string kind,int? category,CancellationToken ct)
+    public async Task<JsonArray> List(string kind,int? category,CancellationToken ct,ViewerAccounts.Access? access=null)
     {
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
         await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.Id,"+VodPublication.EffectiveId+",i.Name,i.Extension,i.Metadata FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" LEFT JOIN VodPublicationOrder o ON o.PublicId=("+VodPublication.EffectiveId+") AND o.Kind=i.Kind WHERE "+Visible+" AND i.Kind=$0 AND ($1=0 OR ("+VodPublication.EffectiveId+")=$1) ORDER BY o.SortOrder IS NULL,o.SortOrder,p.Priority,p.Id,c.SortOrder,i.SortOrder",kind,category??0);
         await using var reader=await cmd.ExecuteReaderAsync(ct);var result=new JsonArray();
         while(await reader.ReadAsync(ct))
         {
+            if(access is not null&&!access.Allows(kind,reader.GetInt32(1)))continue;
             var obj=PublicMetadata(JsonNode.Parse(reader.GetString(4))!.AsObject());
             obj[kind=="movie"?"stream_id":"series_id"]=reader.GetInt32(0);obj["category_id"]=reader.GetInt32(1).ToString();obj["name"]=reader.GetString(2);obj["num"]=result.Count+1;
             if(kind=="movie"){obj["container_extension"]=reader.GetString(3);obj["stream_type"]="movie";obj["direct_source"]="";}
             result.Add(obj);
         }
+        if(access is not null&&!access.Playlist.AllPublished)
+        {
+            var ordered=result.OrderBy(n=>access.Entries.FirstOrDefault(e=>e.Kind==kind&&e.CategoryId==int.Parse(n!["category_id"]!.ToString()))?.SortOrder??int.MaxValue).Select(n=>n!.DeepClone()).ToArray();
+            result.Clear();foreach(var n in ordered){n["num"]=result.Count+1;result.Add(n);}
+        }
         return result;
     }
-    private async Task<(int Provider,long Source,string Extension,string Metadata)?> Find(int id,string kind,CancellationToken ct)
+    private async Task<(int Provider,long Source,string Extension,string Metadata)?> Find(int id,string kind,CancellationToken ct,ViewerAccounts.Access? access=null)
     {
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
-        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,i.SourceId,i.Extension,i.Metadata FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" WHERE "+Visible+" AND i.Id=$0 AND i.Kind=$1",id,kind);
-        await using var r=await cmd.ExecuteReaderAsync(ct);return await r.ReadAsync(ct)?(r.GetInt32(0),r.GetInt64(1),r.GetString(2),r.GetString(3)):null;
+        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,i.SourceId,i.Extension,i.Metadata,"+VodPublication.EffectiveId+" FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" WHERE "+Visible+" AND i.Id=$0 AND i.Kind=$1",id,kind);
+        await using var r=await cmd.ExecuteReaderAsync(ct);return await r.ReadAsync(ct)&&(access is null||access.Allows(kind,r.GetInt32(4)))?(r.GetInt32(0),r.GetInt64(1),r.GetString(2),r.GetString(3)):null;
     }
-    public async Task<Media?> Resolve(int id,string kind,CancellationToken ct)
+    public async Task<Media?> Resolve(int id,string kind,CancellationToken ct,ViewerAccounts.Access? access=null)
     {
         await using var db=await factory.CreateDbContextAsync(ct);
         if(kind=="movie")
         {
-            var row=await Find(id,kind,ct);if(row is null)return null;var x=row.Value;
+            var row=await Find(id,kind,ct,access);if(row is null)return null;var x=row.Value;
             var p=await db.Providers.AsNoTracking().SingleOrDefaultAsync(p=>p.Id==x.Provider&&p.Enabled,ct);return p is null?null:new(p,x.Source,x.Extension);
         }
         await db.Database.OpenConnectionAsync(ct);
         int provider;long source;string ext;
-        await using(var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,e.SourceId,e.Extension FROM VodEpisodes e JOIN VodItems i ON i.Id=e.ItemId JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" WHERE "+Visible+" AND e.Active=1 AND e.Id=$0",id))
-        await using(var r=await cmd.ExecuteReaderAsync(ct)){if(!await r.ReadAsync(ct))return null;provider=r.GetInt32(0);source=r.GetInt64(1);ext=r.GetString(2);}
+        await using(var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.ProviderId,e.SourceId,e.Extension,"+VodPublication.EffectiveId+" FROM VodEpisodes e JOIN VodItems i ON i.Id=e.ItemId JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+VodPublication.Joins+" WHERE "+Visible+" AND e.Active=1 AND e.Id=$0",id))
+        await using(var r=await cmd.ExecuteReaderAsync(ct)){if(!await r.ReadAsync(ct)||(access is not null&&!access.Allows("series",r.GetInt32(3))))return null;provider=r.GetInt32(0);source=r.GetInt64(1);ext=r.GetString(2);}
         var pr=await db.Providers.AsNoTracking().SingleOrDefaultAsync(p=>p.Id==provider&&p.Enabled,ct);return pr is null?null:new(pr,source,ext);
     }
-    public async Task<JsonObject?> Detail(int id,string kind,CancellationToken ct)
+    public async Task<JsonObject?> Detail(int id,string kind,CancellationToken ct,ViewerAccounts.Access? access=null)
     {
         await details.WaitAsync(ct);
         try
         {
-            var found=await Find(id,kind,ct);if(found is null)return null;var item=found.Value;
+            var found=await Find(id,kind,ct,access);if(found is null)return null;var item=found.Value;
             await using var db=await factory.CreateDbContextAsync(ct);
             var provider=await db.Providers.AsNoTracking().SingleAsync(p=>p.Id==item.Provider&&p.Enabled,ct);
             await db.Database.OpenConnectionAsync(ct);var conn=(SqliteConnection)db.Database.GetDbConnection();

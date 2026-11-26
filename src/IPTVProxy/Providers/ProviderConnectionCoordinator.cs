@@ -3,6 +3,7 @@ public sealed class ProviderConnectionCoordinator
 {
     private readonly object gate=new();
     private readonly Dictionary<int,int> counts=new();
+    public bool HasCapacity(int provider,int limit){lock(gate)return counts.GetValueOrDefault(provider)<limit;}
     public IDisposable? TryReserve(int provider,int limit)
     {
         lock(gate)

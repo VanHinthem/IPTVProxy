@@ -1,4 +1,4 @@
-# NAS deployment (Live TV MVP)
+# NAS deployment (IPTVProxy MVP)
 
 Use a CI-tested immutable GHCR image tag. Copy compose.yaml and .env.example into a NAS directory; copy .env.example to .env, chmod 600, use distinct random hexadecimal passwords (openssl rand -hex 24), and fill in the image tag. Keep the named volume and back it up together with its data-protection keys. Never delete the volume to fix an upgrade.
 
@@ -6,9 +6,9 @@ Initial test: bind to loopback, set PUBLIC_BASE_URL=http://localhost:5089, run d
 
 For HTTPS use a trusted reverse proxy, preserve Host, enable WebSockets and disable proxy buffering/cache for live streams. Disable access logging for credential-bearing URLs throughout the proxy chain. Set PUBLIC_BASE_URL to the actual HTTPS origin. Restrict the backend port to the proxy by private Docker networking or firewall rules; never forward the backend directly from the internet.
 
-For remote playback without VPN, use a public trusted TLS certificate at the reverse proxy and forward only the required HTTPS port. A DNS-only record can avoid buffering via a CDN; this exposes the origin IP and removes CDN protection. Restrict administration to trusted networks using proxy rules covering the admin UI, static assets and Blazor negotiation endpoints. Do not expose NAS management ports. Verify access restrictions from outside the LAN before enabling remote users. The application currently uses separate bootstrap admin and IPTV accounts, a basic origin check and rate limits; it is not a hardened multi-user service. Rate limits currently see the proxy IP rather than individual remote clients.
+For remote playback without VPN, use a public trusted TLS certificate at the reverse proxy and forward only the required HTTPS port. A DNS-only record can avoid buffering via a CDN; this exposes the origin IP and removes CDN protection. Restrict administration to trusted networks using proxy rules covering the admin UI, static assets and Blazor negotiation endpoints. Do not expose NAS management ports. Verify access restrictions from outside the LAN before enabling remote users. The application currently uses separate bootstrap admin and IPTV accounts, a basic origin check and rate limits; it is not a hardened multi-user service. Without explicit trusted-proxy configuration, rate limits see the proxy IP rather than individual remote clients.
 
-Add only authorized providers with their actual subscription connection limits. HTTP and HTTPS upstreams are accepted; HTTP exposes provider credentials and data in transit. Live MPEG-TS only, with bounded validated redirects and a shared in-memory ring buffer per active channel. Single-viewer channel switching can displace other viewers on providers with a single allowed connection; disable it for independent simultaneous users (Playback__SingleViewerChannelSwitch=false via compose environment).
+Add only authorized providers with their actual subscription connection limits. HTTP and HTTPS upstreams are accepted; HTTP exposes provider credentials and data in transit. Live MPEG-TS only, with bounded validated redirects and a shared in-memory ring buffer per active channel. In workblock 4 automatic displacement is disabled; a new request must wait for its account and provider capacity.
 
 Test provider import, catalog visibility, playback, switching and stability; confirm external access separately. Do not share real credentials or stream URLs in bug reports.
 
@@ -17,3 +17,32 @@ Gebruik uitsluitend een immutable `sha-...` image waarvan CI én Development ima
 
 ## EPG en afbeeldingen
 XMLTV wordt lokaal gecachet en als volledig bestand aangeboden. `Epg__RefreshHours` (standaard 6, 0 uit) stuurt import; `Catalog__RefreshHours` stuurt catalogusimport. `Artwork__CacheMegabytes` standaard 256; cache op persistent volume. Bewaar ook `artwork-signing.key` en data-protectiesleutels bij backup. Artwork-routes zijn ondertekende/beschermde bearer-URLs; geen providercredentials in clientcatalogus. Laat `/artwork/` bereikbaar voor IPTV-clients, maar beperk beheer via reverse proxy. Geen upstream SVG; lokale placeholder mogelijk. Controleer logo's en EPG na clientrefresh. Programma-afbeeldingen alleen indien aangeleverd en ondersteund door client; geen externe verrijking in MVP 2.
+
+
+## Werkblok 3 en 4
+Films en series gebruiken native HTTP Range-playback. Importintervallen worden per provider/type via Updates beheerd (0 = uit). Werkblok 4 introduceert accounts, playlists en onafhankelijke sessies; functioneel geaccepteerd op de NAS op 26 november 2026. Verifieer de netwerkrestricties bij elke wijziging van de proxyconfiguratie. Controleer bij upgrade behoud van IDs, account, catalogus en volume.
+
+### Netwerkconfiguratie werkblok 4
+- `TRUSTED_PROXIES`: komma-gescheiden daadwerkelijke TCP-peeradressen van Nginx zoals gezien vanuit de container. Geen willekeurige Docker-subnetten vertrouwen.
+- `LOCAL_NETWORKS`: komma-gescheiden CIDR-bereiken van eigen LAN/VPN. Neem geen proxy- of Docker-bridgebereik op.
+- `RESTRICT_ADMIN=true`: pas inschakelen nadat beheer via een vertrouwde lokale client is getest. Standaard false voor migratiecompatibiliteit.
+- Nginx moet X-Forwarded-For overschrijven met het gevalideerde clientadres (bij één directe proxy: $remote_addr). Geen door de client aangeleverde waarde vertrouwen. Bij extra proxyhops eerst de keten afzonderlijk configureren en testen.
+- Controleer vanaf LAN én extern dat beheer en lokale accounts correct worden geweigerd/toegelaten. Behoud de reverse-proxyrestricties als extra beveiligingslaag.
+- Maak vooraf een consistente volumebackup. Na migratie worden IPTV-wachtwoorden beheerd in Gebruikers; de bootstrapvariabelen blijven vereist voor deze versie maar overschrijven bestaande accounts niet.
+- Zappen/seek: bij overlappende requests en limiet 1 wacht de nieuwe request maximaal vijf seconden op vrijgave; een begrensde handoff is toegestaan binnen dezelfde herkende speler; verschillende accounts verdringen elkaar niet. IP/User-Agent-herkenning is heuristisch, geen harde apparaatidentiteit.
+
+### Bestaande NPM-installatie behouden
+Gebruik het reeds bestaande externe NPM Docker-netwerk; voeg uitsluitend IPTVProxy toe aan dat netwerk naast zijn default netwerk. In de bestaande NAS-compose, onder de service: 
+```yaml
+    networks:
+      - default
+      - npm
+```
+En op topniveau:
+```yaml
+networks:
+  npm:
+    external: true
+    name: nginx-proxy-manager_default
+```
+Behoud de bestaande LAN-poortbinding, het volume en alle overige instellingen. Configureer de bestaande NPM proxy-host met het daadwerkelijk toegewezen IPTVProxy-adres op dit netwerk en interne poort 8080. Vertrouw uitsluitend het actuele NPM-peeradres via TRUSTED_PROXIES. De gebruiker kiest ervoor NPM zelf niet te herconfigureren of opnieuw aan te maken; dynamische IP-adressen blijven een bewuste operationele beperking. Controleer beide adressen na elke container-recreate en corrigeer zo nodig de proxy-host en TRUSTED_PROXIES voordat externe toegang wordt gebruikt. Controleer /health, lokale beheerlogin, externe weigering van beheer en lokale accounts, en externe playback van toegestane accounts. Bij afwijkingen externe toegang blokkeren tot herstel. Controleer tevens dat aangeleverde X-Forwarded-For niet kan worden gebruikt om lokale toegang te verkrijgen. Gebruik geen gehele Docker-subnetten als vertrouwde proxy of lokaal netwerk. Lokale directe HTTP-toegang is alleen voor een vertrouwd LAN; externe toegang via HTTPS. Split DNS is optioneel. Geen wijziging van NPM-container, router of DNS-server vereist.

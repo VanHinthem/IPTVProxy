@@ -9,6 +9,9 @@ services:
       Accounts__IptvName: "${IPTV_NAME:-viewer}"
       Accounts__IptvPassword: "${IPTV_PASSWORD:?Set IPTV_PASSWORD in local .env}"
       PublicBaseUrl: "${PUBLIC_BASE_URL:-http://localhost:8080}"
+      Network__TrustedProxies: "${TRUSTED_PROXIES:-}"
+      Network__LocalNetworks: "${LOCAL_NETWORKS:-127.0.0.0/8,::1/128}"
+      Network__RestrictAdmin: "${RESTRICT_ADMIN:-false}"
     volumes:
       - iptvproxy-data:/data
     restart: unless-stopped

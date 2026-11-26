@@ -14,6 +14,33 @@ public sealed class SharedStreamBuffer
         if (capacity < 188 || capacity % 188 != 0) throw new ArgumentOutOfRangeException(nameof(capacity));
         data = new byte[capacity];
     }
+    // Require three sync bytes at packet intervals before accepting alignment.
+    public static int FindSync(ReadOnlySpan<byte> bytes)
+    {
+        for(int i=0;i+376<bytes.Length;i++)
+            if(bytes[i]==0x47&&bytes[i+188]==0x47&&bytes[i+376]==0x47)return i;
+        return -1;
+    }
+    // A recent PAT preceding a random-access indication is a best-effort
+    // decoder entry point, not a guarantee of a complete IDR or PMT.
+    public long DecoderStartPosition(int historyBytes)
+    {
+        lock(gate)
+        {
+            var fallback=Math.Max(0,head-Math.Min(Math.Max(0,historyBytes/188*188),data.Length));
+            long pat=-1,preferred=-1;
+            for(long pos=fallback;pos<head;pos+=188)
+            {
+                var i=(int)(pos%data.Length);
+                if(data[i]!=0x47||(data[i+1]&0x80)!=0)continue;
+                var pid=((data[i+1]&31)<<8)|data[i+2];
+                if(pid==0&&(data[i+1]&0x40)!=0)pat=pos;
+                var adaptation=(data[i+3]>>4)&3;
+                if(pat>=0&&pid!=0&&pid!=8191&&(adaptation==2||adaptation==3)&&data[i+4]>0&&data[i+4]<=183&&(data[i+5]&0x40)!=0)preferred=pat;
+            }
+            return preferred>=0?preferred:pat>=0?pat:fallback;
+        }
+    }
     public long StartPosition(int historyBytes)
     {
         lock (gate)

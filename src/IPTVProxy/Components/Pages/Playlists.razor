@@ -1,0 +1,100 @@
+@page "/playlists"
+@using IPTVProxy.Security
+@using IPTVProxy.Data
+@using IPTVProxy.Providers
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Web
+@inject ViewerAccounts Store
+@inject IDbContextFactory<CatalogDb> Factory
+@inject VodPublication Vod
+<PageTitle>Playlists — IPTVProxy</PageTitle>
+<h1>Playlists</h1>
+<p><a href="/">Providers</a> · <a href="/users">Gebruikers</a> · <a href="/groups">Live TV-groepen</a> · <a href="/vod">Films en series</a></p>
+<p>Een playlist verwijst naar bestaande gepubliceerde groepen en categorieën.</p>
+<button disabled="@busy" @onclick="New">Nieuwe playlist</button>
+<table><thead><tr><th>Naam</th><th>Publicatie</th><th>Gebruikers</th><th>Status</th><th></th></tr></thead><tbody>
+@foreach(var p in playlists)
+{
+    <tr><td>@p.Name</td><td>@(p.AllPublished?"Alle gepubliceerde content":"Eigen selectie")</td><td>@accounts.Count(a=>a.PlaylistId==p.Id)</td><td>@(p.Enabled?"Actief":"Uit")</td><td><button disabled="@busy" @onclick="()=>Edit(p,false)">Bewerken</button><button disabled="@busy" @onclick="()=>Edit(p,true)">Dupliceren</button></td></tr>
+}
+</tbody></table>
+@if(editing)
+{
+    <fieldset disabled="@busy">
+        <legend>@(id==0?"Nieuwe playlist":"Playlist wijzigen")</legend>
+        <label>Naam <input @bind="name" maxlength="200" /></label>
+        <label><input type="checkbox" @bind="enabled" /> Actief</label>
+        <label><input type="checkbox" @bind="allPublished" /> Alle gepubliceerde content automatisch opnemen</label>
+        @if(!allPublished)
+        {
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem">
+                @foreach(var type in kinds)
+                {
+                    var selected=entries.Where(e=>e.Kind==type.Key).ToList();
+                    <section>
+                        <h3>@type.Value (@selected.Count)</h3>
+                        <div style="max-height:300px;overflow:auto">
+                        @foreach(var e in selected)
+                        {
+                            <div><button @onclick="()=>Move(e,-1)">↑</button><button @onclick="()=>Move(e,1)">↓</button><button @onclick="()=>Remove(e)">×</button> @EntryName(e)</div>
+                        }
+                        </div>
+                        <input placeholder="Zoek categorie" value="@Search(type.Key)" @oninput="e=>searches[type.Key]=e.Value?.ToString()??string.Empty" />
+                        <div style="max-height:300px;overflow:auto">
+                        @foreach(var c in options.Where(c=>c.Kind==type.Key && c.Name.Contains(Search(type.Key),StringComparison.OrdinalIgnoreCase)))
+                        {
+                            <div><button disabled="@entries.Any(e=>e.Kind==c.Kind&&e.CategoryId==c.Id)" @onclick="()=>Add(c)">+</button> @c.Name</div>
+                        }
+                        </div>
+                    </section>
+                }
+            </div>
+        }
+        <button @onclick="Save">Opslaan</button><button @onclick="()=>editing=false">Annuleren</button>
+    </fieldset>
+}
+<p role="status">@status</p>
+@code{
+    private sealed record Category(string Kind,int Id,string Name);
+    private readonly KeyValuePair<string,string>[] kinds=[new("live","Live TV-groepen"),new("raw","Originele Live TV-categorieën"),new("movie","Films"),new("series","Series")];
+    private readonly Dictionary<string,string> searches=new();
+    private List<Category> options=[];
+    private List<ViewerAccounts.Playlist> playlists=[];
+    private List<ViewerAccounts.Account> accounts=[];
+    private List<ViewerAccounts.Entry> entries=[];
+    private bool editing,busy,enabled=true,allPublished;
+    private int id;
+    private string name="",status="";
+    private string Search(string kind)=>searches.GetValueOrDefault(kind,"");
+    protected override async Task OnInitializedAsync()=>await Load();
+    private async Task Load()
+    {
+        playlists=await Store.Playlists(CancellationToken.None);accounts=await Store.Accounts(CancellationToken.None);
+        await using var db=await Factory.CreateDbContextAsync();
+        options=await db.ChannelGroups.AsNoTracking().Where(g=>g.Enabled).OrderBy(g=>g.SortOrder).ThenBy(g=>g.Id).Select(g=>new Category("live",g.Id,g.Name)).ToListAsync();
+        options.AddRange(await (from c in db.LiveCategories.AsNoTracking() join p in db.Providers.AsNoTracking() on c.ProviderId equals p.Id where c.Active&&p.Enabled orderby p.Priority,c.SourceOrder select new Category("raw",c.Id,p.Name+" - "+c.Name)).ToListAsync());
+        foreach(var kind in new[]{"movie","series"})options.AddRange((await Vod.List(kind,CancellationToken.None)).Select(c=>new Category(kind,c.Id,c.Name)));
+    }
+    private void New(){id=0;name="";enabled=true;allPublished=false;entries=[];searches.Clear();editing=true;status="";}
+    private async Task Edit(ViewerAccounts.Playlist p,bool duplicate)
+    {
+        if(busy)return;busy=true;
+        try{id=duplicate?0:p.Id;name=duplicate?p.Name+" (kopie)":p.Name;enabled=p.Enabled;allPublished=p.AllPublished;entries=(await Store.Entries(p.Id,CancellationToken.None)).ToList();searches.Clear();editing=true;status="";}
+        catch{status="Playlist laden mislukt.";}finally{busy=false;}
+    }
+    private string EntryName(ViewerAccounts.Entry e)=>options.FirstOrDefault(c=>c.Kind==e.Kind&&c.Id==e.CategoryId)?.Name??$"Niet meer gepubliceerd ({e.CategoryId})";
+    private void Add(Category c){if(!entries.Any(e=>e.Kind==c.Kind&&e.CategoryId==c.Id))entries.Add(new(c.Kind,c.Id,entries.Count));}
+    private void Remove(ViewerAccounts.Entry e)=>entries.Remove(e);
+    private void Move(ViewerAccounts.Entry e,int delta)
+    {
+        var same=entries.Where(x=>x.Kind==e.Kind).ToList();var i=same.IndexOf(e);var j=i+delta;
+        if(i<0||j<0||j>=same.Count)return;
+        int a=entries.IndexOf(e),b=entries.IndexOf(same[j]);(entries[a],entries[b])=(entries[b],entries[a]);
+    }
+    private async Task Save()
+    {
+        if(busy)return;busy=true;
+        try{await Store.SavePlaylist(id,name,enabled,allPublished,entries.Select((e,i)=>e with{SortOrder=i}),CancellationToken.None);editing=false;await Load();status="Playlist opgeslagen.";}
+        catch(ArgumentException ex){status=ex.Message;}catch{status="Opslaan mislukt.";}finally{busy=false;}
+    }
+}

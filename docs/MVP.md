@@ -8,9 +8,12 @@ Modulaire monoliet: .NET 10 / ASP.NET Core, Blazor Web App Interactive Server, E
 - [#3 Films en series](https://github.com/VanHinthem/IPTVProxy/issues/3): categorie-selectie, metadata on demand, Range/seek.
 - [#4 Betrouwbaarheid](https://github.com/VanHinthem/IPTVProxy/issues/4): live sharing, failover, providerlimieten, monitoring. Providerprioriteit eerst; HLS eerder indien nodig.
 
-Status 25 november 2026: #1 gemerged; #2 gemerged (PR #6); #3 volgende. Live-catalogus/EPG-verfijningen: https://github.com/VanHinthem/IPTVProxy/issues/7.
+Status 26 november 2026: #1–#3 gemerged; #4 gestart. Live-catalogus/EPG-verfijningen: https://github.com/VanHinthem/IPTVProxy/issues/7.
 
-Alle vier samen vormen de MVP. V1: uitgebreidere matching, dynamische groepen, externe XMLTV, meerdere accounts/profielen, strategieën, historie, backup/herstel. Later: overige bronnen, uitgebreide analyses, metadata-verrijking en complexe regels. Zie FUNCTIONAL_DESIGN.md voor productvisie.
+Alle vier samen vormen de MVP. V1: uitgebreidere matching, dynamische groepen, externe XMLTV, uitgebreide profielen, strategieën, historie, backup/herstel. Later: overige bronnen, uitgebreide analyses, metadata-verrijking en complexe regels. Zie FUNCTIONAL_DESIGN.md voor productvisie.
 
 ## Randvoorwaarden
 Gescheiden beheer/IPTV-authenticatie, versleutelde providercredentials, geen credential-URLs in logs, gecontroleerde hosts/redirects, lokale beheerinterface, HTTPS voor externe toegang. Alleen geautoriseerde bronnen binnen providerrechten. Onbekende capaciteit conservatief behandelen. Transactionele snapshots, behoud IDs en laatste geldige catalogus. MPEG-TS eerst, HLS apart behandelen; failover hoeft niet naadloos te zijn. Praktijktests met twee providers en Nuvio + IPTV, inclusief 5G, geaccepteerd op 25 november 2026. Arvio en publieke toegangsrestricties nog afzonderlijk valideren.
+
+## Werkblok 4 — akkoord 26 november 2026
+Meerdere IPTV-accounts en herbruikbare playlists met één standaardplaylist per account horen bij het MVP. Zie issue #4. Bestaande publicatie-ID's en configuratie blijven behouden. Geen automatische verdringing van andere kijkers.

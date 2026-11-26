@@ -90,3 +90,7 @@ Eigen speler, DVR/opnames, eigen timeshiftopslag, transcoding, HDHomeRun, plugin
 - Architectuur: taal/framework ( .NET kandidaat), frontend, database, containeropzet, jobmodel, secretbeheer, teststrategie. Geen definitieve technologiekeuze.
 - Licentie voor eigen project nog kiezen; Dispatcharr slechts inspiratie, geen broncode overgenomen.
 - UI-voorbeelden uit gesprekken zijn illustratief, geen vastgelegde visuele specificatie.
+
+
+## Besluit werkblok 4 — playlists (26 november 2026)
+Playlists zijn herbruikbare selecties van bestaande live-groepen en gepubliceerde film-/seriecategorieën met eigen volgorde. Geen duplicatie van broncatalogus. Accounts kunnen meerdere playlists toegewezen krijgen, één verplichte standaard bepaalt Xtream-publicatie in MVP. Iedere catalogus-, detail-, EPG- en playbackroute handhaaft de toegangsselectie. Ondertekende artwork-links blijven beperkt tot geautoriseerde publicatie. Migratie behoudt bestaande credentials, publicatie-ID's, groepen en categorieën via playlist Standaard; raw-modus compatibiliteit expliciet testen. Playlistbeheer omvat aanmaken, wijzigen, dupliceren, verwijderen met referentiecontrole en toewijzen. Account- en providerlimieten onafhankelijk; geen verdringing van andere kijkers. Individuele playlist-URL's later.

@@ -30,3 +30,17 @@ ring.Complete();
 Check(wait.Changed.IsCompleted && ring.Read(tail.Next, output).Completed, "Completion wakes readers");
 Check(ring.Read(188, output).Count == 376, "Buffered data remains readable");
 Console.WriteLine("Shared stream buffer checks passed.");
+
+var packets=new byte[3*188+7];
+for(int i=0;i<3;i++)packets[7+i*188]=0x47;
+Check(SharedStreamBuffer.FindSync(packets)==7,"TS alignment after prefix");
+Check(SharedStreamBuffer.FindSync(packets.AsSpan(0,380))==-1,"require third sync");
+var decoder=new SharedStreamBuffer(188*8);
+byte[] Ts(int pid,bool pat=false,bool random=false)
+{
+    var p=new byte[188];p[0]=0x47;p[1]=(byte)((pid>>8)|(pat?0x40:0));p[2]=(byte)pid;p[3]=0x30;p[4]=1;p[5]=(byte)(random?0x40:0);return p;
+}
+decoder.Append(Ts(100));decoder.Append(Ts(0,true));decoder.Append(Ts(100,false,true));decoder.Append(Ts(100));
+Check(decoder.DecoderStartPosition(188*8)==188,"prefer PAT before random access");
+Check(decoder.DecoderStartPosition(188)==564,"bounded fallback without PAT");
+Console.WriteLine("TS startup checks passed.");
