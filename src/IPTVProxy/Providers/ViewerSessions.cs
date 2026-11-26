@@ -41,7 +41,7 @@ public sealed class ViewerSessions
         config.GetValue("Playback:SingleViewerChannelSwitch",true) &&
         (config["Playback:SinglePlayerAccounts"]??config["Accounts:IptvName"]??"viewer")
             .Split(',',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries).Contains(username,StringComparer.Ordinal);
-    public int Count(int accountId){lock(gate)return active.Values.Count(x=>x.AccountId==accountId);}
+    public int Count(int accountId){lock(gate)return active.Values.Where(x=>x.AccountId==accountId).Select(x=>x.Kind=="live"?$"live:{x.AssetId}":x.Id.ToString()).Distinct().Count();}
     public Snapshot[] List()
     {
         lock(gate)return active.Values.Select(x=>new Snapshot(x.Id,x.AccountId,x.Kind,x.AssetId,x.Started,x.ProviderId,x.SourceId,Interlocked.Read(ref x.Bytes))).ToArray();
@@ -56,7 +56,11 @@ public sealed class ViewerSessions
             lock(gate)
             {
                 if(timeout.IsCancellationRequested)return null;
-                if(active.Values.Count(x=>x.AccountId==accountId)<limit)
+                var owned=active.Values.Where(x=>x.AccountId==accountId).ToArray();
+                // Count a bounded overlap of same-channel live requests as one logical viewer.
+                // Different assets and VOD still require handoff or a free slot.
+                var sameLive=allowHandoff&&limit==1&&kind=="live"&&owned.Length<2&&owned.Length>0&&owned.All(x=>!x.Closing&&x.Kind==kind&&x.AssetId==assetId);
+                if(owned.Length<limit||sameLive)
                 {
                     var lease=new Lease(this,accountId,kind,assetId);active.Add(lease.Id,lease);return lease;
                 }
@@ -65,8 +69,12 @@ public sealed class ViewerSessions
                 wait=changed.Task;
                 if(allowHandoff&&limit==1)
                 {
-                    var previous=active.Values.SingleOrDefault(x=>x.AccountId==accountId);
-                    if(previous is not null&&!previous.Closing){previous.Closing=true;previous.Stop.Cancel();}
+                    foreach(var previous in owned.Where(x=>!x.Closing))
+                    {
+                        // Never restart an active upstream just because a third duplicate arrived.
+                        if(kind=="live"&&previous.Kind==kind&&previous.AssetId==assetId)continue;
+                        previous.Closing=true;previous.Stop.Cancel();
+                    }
                 }
             }
             try{await wait.WaitAsync(timeout.Token);}catch(OperationCanceledException){return null;}
