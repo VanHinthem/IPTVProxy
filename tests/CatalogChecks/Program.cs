@@ -204,6 +204,23 @@ using var releaseClientA=clientA!.Token.Register(clientA.Dispose);
 using var releaseDuplicateA=duplicateA!.Token.Register(duplicateA.Dispose);
 using var switched=await clientSessions.Acquire(42,1,"live",102,ct,true,"device-a");
 Check(switched is not null&&clientSessions.Count(42)==1,"same client can zap on new account");
+var splitPlayer=new ViewerSessions();
+using var probe=await splitPlayer.Acquire(50,1,"live",101,ct,true,"probe","network-a");
+using var decoder=await splitPlayer.Acquire(50,1,"live",101,ct,true,"libvlc","network-a");
+Check(probe is not null&&decoder is not null&&splitPlayer.Count(50)==1,"different agents on same network and asset share one logical viewer");
+using(var denied=new CancellationTokenSource())
+{
+    var pending=splitPlayer.Acquire(50,1,"live",101,denied.Token,true,"other","network-b");
+    Check(!pending.IsCompleted,"different network must not share account slot");
+    denied.Cancel();Check(await pending is null,"different network denied");
+}
+probe!.Dispose();
+using var decoderRelease=decoder!.Token.Register(decoder.Dispose);
+using var movieProbe=await splitPlayer.Acquire(50,1,"movie",2,ct,true,"probe","network-a");
+Check(movieProbe is not null,"original probe alias can switch after initial live request ends");
+using var movieRelease=movieProbe!.Token.Register(movieProbe.Dispose);
+using var movieDecoder=await splitPlayer.Acquire(50,1,"movie",2,ct,true,"libvlc","network-a");
+Check(movieDecoder is not null&&splitPlayer.Count(50)==1,"VOD second component can replace probe");
 var network=new ClientNetwork(viewerConfig);
 var http=new DefaultHttpContext();
 http.Connection.RemoteIpAddress=IPAddress.Parse("192.168.50.4");
