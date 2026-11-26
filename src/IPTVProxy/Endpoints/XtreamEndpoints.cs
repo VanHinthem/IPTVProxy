@@ -38,7 +38,7 @@ public static class XtreamEndpoints
     {
         var q=ctx.Request.Query;
         var access=await accounts.Authenticate(q["username"].ToString(),q["password"].ToString(),ctx.RequestAborted);
-        if(access is null)return Results.Unauthorized();
+        if(access is null || (!access.Account.AllowRemote && !ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx)))return Results.Unauthorized();
         ctx.Response.Headers.CacheControl="no-store";
         var file=await guide.OpenGuideAsync(ctx.RequestAborted,access);
         if(file is null)return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
@@ -49,7 +49,7 @@ public static class XtreamEndpoints
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
         var access=await accounts.Authenticate(q["username"].ToString(),q["password"].ToString(),ctx.RequestAborted);
-        if (access is null)
+        if (access is null || (!access.Account.AllowRemote && !ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx)))
             return Results.Json(new { user_info = new { auth = 0, status = "Disabled" } }, statusCode: 401);
         var ct = ctx.RequestAborted;
         await using var db = await factory.CreateDbContextAsync(ct);
