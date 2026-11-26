@@ -7,6 +7,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 // Request URLs and upstream exceptions can contain credentials.
@@ -22,6 +24,15 @@ builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddSingleton<LocalAccounts>();
 builder.Services.AddSingleton<ViewerAccounts>();
 builder.Services.AddSingleton<ViewerSessions>();
+builder.Services.AddSingleton<ClientNetwork>();
+var trustedProxies=ClientNetwork.TrustedProxies(builder.Configuration);
+builder.Services.Configure<ForwardedHeadersOptions>(options=>{
+    options.ForwardedHeaders=ForwardedHeaders.XForwardedFor;
+    options.ForwardLimit=1;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+    foreach(var ip in trustedProxies)options.KnownProxies.Add(ip);
+});
 builder.Services.AddSingleton<LiveCatalog>();
 builder.Services.AddSingleton<CatalogHistory>();
 builder.Services.AddHostedService<CatalogRefresh>();
@@ -75,6 +86,25 @@ await using (var scope = app.Services.CreateAsyncScope())
     }
 }
 await app.Services.GetRequiredService<ViewerAccounts>().Bootstrap(CancellationToken.None);
+if(trustedProxies.Length>0)
+{
+    app.Use(async (ctx,next)=>{
+        var peer=ctx.Connection.RemoteIpAddress;
+        if(peer?.IsIPv4MappedToIPv6==true)peer=peer.MapToIPv4();
+        if(peer is not null&&trustedProxies.Contains(peer))ctx.Items["OriginalProxy"]=peer;
+        await next();
+    });
+    app.UseForwardedHeaders();
+    app.Use(async(ctx,next)=>{
+        if(ctx.Items.TryGetValue("OriginalProxy",out var original)&&original is IPAddress peer)
+        {
+            var ip=ctx.Connection.RemoteIpAddress;
+            if(ip?.IsIPv4MappedToIPv6==true)ip=ip.MapToIPv4();
+            if(ip is null||ip.Equals(peer)||trustedProxies.Contains(ip))ctx.Items["UnresolvedProxy"]=true;
+        }
+        await next();
+    });
+}
 app.UseRouting();
 app.Use(async (ctx,next)=>{
     if(ctx.Request.Path.StartsWithSegments("/movie")||ctx.Request.Path.StartsWithSegments("/series"))
