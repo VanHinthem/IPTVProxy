@@ -34,20 +34,22 @@ public static class XtreamEndpoints
         ctx.Response.Headers["Content-Security-Policy"]="default-src 'none'; sandbox";
         return Results.File(image.Bytes,image.ContentType);
     }
-    private static async Task<IResult> XmlTv(HttpContext ctx,LocalAccounts accounts,XmlTvGuide guide)
+    private static async Task<IResult> XmlTv(HttpContext ctx,ViewerAccounts accounts,XmlTvGuide guide)
     {
         var q=ctx.Request.Query;
-        if(!accounts.IptvValid(q["username"].ToString(),q["password"].ToString()))return Results.Unauthorized();
+        var access=await accounts.Authenticate(q["username"].ToString(),q["password"].ToString(),ctx.RequestAborted);
+        if(access is null)return Results.Unauthorized();
         ctx.Response.Headers.CacheControl="no-store";
-        var file=await guide.OpenGuideAsync(ctx.RequestAborted);
+        var file=await guide.OpenGuideAsync(ctx.RequestAborted,access);
         if(file is null)return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         return Results.File(file,"application/xml; charset=utf-8",enableRangeProcessing:false);
     }
-    private static async Task<IResult> Api(HttpContext ctx, LocalAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork, VodCatalog vod, VodPublication publication)
+    private static async Task<IResult> Api(HttpContext ctx, ViewerAccounts accounts, IDbContextFactory<CatalogDb> factory, IConfiguration config, ProviderEpg epg, XmlTvGuide guide, ArtworkService artwork, VodCatalog vod, VodPublication publication)
     {
         ctx.Response.Headers.CacheControl = "no-store";
         var q = ctx.Request.Query;
-        if (!accounts.IptvValid(q["username"].ToString(), q["password"].ToString()))
+        var access=await accounts.Authenticate(q["username"].ToString(),q["password"].ToString(),ctx.RequestAborted);
+        if (access is null)
             return Results.Json(new { user_info = new { auth = 0, status = "Disabled" } }, statusCode: 401);
         var ct = ctx.RequestAborted;
         await using var db = await factory.CreateDbContextAsync(ct);
@@ -58,11 +60,14 @@ public static class XtreamEndpoints
                       where s.Active && c.Active
                       select new { s, p, c };
         var managed = await ManagedPublication.IsEnabled(db, ct);
+        var liveIds=access.Entries.Where(e=>e.Kind=="live").Select(e=>e.CategoryId).ToArray();
+        var rawIds=access.Entries.Where(e=>e.Kind=="raw").Select(e=>e.CategoryId).ToArray();
+        int Order(string kind,int id)=>access.Playlist.AllPublished?0:access.Entries.FirstOrDefault(e=>e.Kind==kind&&e.CategoryId==id)?.SortOrder??int.MaxValue;
+        if(!access.Playlist.AllPublished)streams=streams.Where(x=>rawIds.Contains(x.c.Id));
         if (managed)
         {
             if (q["action"] == "get_live_categories")
-                return Results.Json(await db.ChannelGroups.AsNoTracking().Where(g => g.Enabled).OrderBy(g => g.SortOrder).ThenBy(g => g.Id)
-                    .Select(g => new { category_id = g.Id.ToString(), category_name = g.Name, parent_id = 0 }).ToListAsync(ct));
+                return Results.Json((await db.ChannelGroups.AsNoTracking().Where(g => g.Enabled&&(access.Playlist.AllPublished||liveIds.Contains(g.Id))).OrderBy(g => g.SortOrder).ThenBy(g => g.Id).ToListAsync(ct)).OrderBy(g=>Order("live",g.Id)).Select(g=>new {category_id=g.Id.ToString(),category_name=g.Name,parent_id=0}));
             if (q["action"] == "get_live_streams")
             {
                 int? groupId = null;
@@ -72,7 +77,7 @@ public static class XtreamEndpoints
                     groupId = parsed;
                 }
                 var published = await ManagedPublication.ListAsync(db, groupId, ct);
-                return Results.Json(published.Select((x,i) => new {
+                return Results.Json(published.Where(x=>access.Allows("live",x.GroupId)).OrderBy(x=>Order("live",x.GroupId)).Select((x,i) => new {
                     num = i + 1, name = x.Name, stream_type = "live", stream_id = x.Id,
                     stream_icon = artwork.ChannelUrl(x.ChannelId), epg_channel_id = "iptvproxy." + x.ChannelId, category_id = x.GroupId.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
@@ -84,9 +89,9 @@ public static class XtreamEndpoints
             case "":
                 var origin = new Uri(config["PublicBaseUrl"] ?? "http://localhost:8080");
                 return Results.Json(new {
-                    user_info = new { username = accounts.IptvName, password = q["password"].ToString(),
+                    user_info = new { username = access.Account.Username, password = q["password"].ToString(),
                         auth = 1, status = "Active", exp_date = (string?)null, is_trial = "0",
-                        active_cons = "0", max_connections = "1", allowed_output_formats = new[] { "ts" } },
+                        active_cons = "0", max_connections = access.Account.MaxStreams.ToString(), allowed_output_formats = new[] { "ts" } },
                     server_info = new { url = origin.Host, port = origin.Port.ToString(),
                         https_port = origin.Scheme == "https" ? origin.Port.ToString() : "",
                         server_protocol = origin.Scheme, timezone = "UTC",
@@ -94,11 +99,11 @@ public static class XtreamEndpoints
                         time_now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") }
                 });
             case "get_live_categories":
-                return Results.Json(await (from c in db.LiveCategories.AsNoTracking()
+                return Results.Json((await (from c in db.LiveCategories.AsNoTracking()
                     join p in providers on c.ProviderId equals p.Id
-                    where c.Active
+                    where c.Active&&(access.Playlist.AllPublished||rawIds.Contains(c.Id))
                     orderby p.Priority, p.Id, c.SourceOrder, c.Id
-                    select new { category_id = c.Id.ToString(), category_name = p.Name + " - " + c.Name, parent_id = 0 }).ToListAsync(ct));
+                    select new { category_id = c.Id.ToString(), category_name = p.Name + " - " + c.Name, parent_id = 0 }).ToListAsync(ct)).OrderBy(c=>Order("raw",int.Parse(c.category_id))));
             case "get_live_streams":
                 if (!string.IsNullOrEmpty(q["category_id"]) && q["category_id"] != "0")
                 {
@@ -109,18 +114,18 @@ public static class XtreamEndpoints
                     num = x.s.Id, name = x.s.Name, stream_type = "live", stream_id = x.s.Id,
                     epg_channel_id = "iptvproxy.raw." + x.s.Id, category_id = x.c.Id.ToString(),
                     tv_archive = 0, tv_archive_duration = 0, direct_source = ""
-                }).ToListAsync(ct)).Select(x=>new {x.num,x.name,x.stream_type,x.stream_id,stream_icon=artwork.ChannelUrl(x.stream_id,true),x.epg_channel_id,x.category_id,x.tv_archive,x.tv_archive_duration,x.direct_source}));
+                }).ToListAsync(ct)).OrderBy(x=>Order("raw",int.Parse(x.category_id))).Select(x=>new {x.num,x.name,x.stream_type,x.stream_id,stream_icon=artwork.ChannelUrl(x.stream_id,true),x.epg_channel_id,x.category_id,x.tv_archive,x.tv_archive_duration,x.direct_source}));
             case "get_vod_categories": case "get_series_categories":
                 var kind=q["action"]=="get_vod_categories"?"movie":"series";
-                return Results.Json((await publication.List(kind,ct)).Select(c=>new {category_id=c.Id.ToString(),category_name=c.Name,parent_id=0}));
+                return Results.Json((await publication.List(kind,ct)).Where(c=>access.Allows(kind,c.Id)).OrderBy(c=>Order(kind,c.Id)).Select(c=>new {category_id=c.Id.ToString(),category_name=c.Name,parent_id=0}));
             case "get_vod_streams": case "get_series":
                 int? categoryId=null;
                 if(!string.IsNullOrEmpty(q["category_id"])&&q["category_id"]!="0"){if(!int.TryParse(q["category_id"],out var cid)||cid<1)return Results.BadRequest();categoryId=cid;}
-                return Results.Json(await vod.List(q["action"]=="get_vod_streams"?"movie":"series",categoryId,ct));
+                return Results.Json(await vod.List(q["action"]=="get_vod_streams"?"movie":"series",categoryId,ct,access));
             case "get_vod_info": case "get_series_info":
                 var movie=q["action"]=="get_vod_info";
                 if(!int.TryParse(q[movie?"vod_id":"series_id"],out var vodId))return Results.BadRequest();
-                try{var detail=await vod.Detail(vodId,movie?"movie":"series",ct);return detail is null?Results.NotFound():Results.Json(detail);}
+                try{var detail=await vod.Detail(vodId,movie?"movie":"series",ct,access);return detail is null?Results.NotFound():Results.Json(detail);}
                 catch(Exception) when(!ct.IsCancellationRequested){return Results.StatusCode(502);}
             case "get_short_epg": case "get_simple_data_table":
                 if(!int.TryParse(q["stream_id"],out var requested))return Results.Json(new {epg_listings=Array.Empty<object>()});
@@ -128,7 +133,8 @@ public static class XtreamEndpoints
                 int[] sourceIds;
                 if(managed)
                 {
-                    var candidates=await ManagedPublication.ResolveAsync(db,requested,ct);
+                    var groupId=await db.PublishedIdentities.AsNoTracking().Where(x=>x.Id==requested-ManagedPublication.PublicOffset).Select(x=>x.GroupId).SingleOrDefaultAsync(ct);
+                    var candidates=access.Allows("live",groupId)?await ManagedPublication.ResolveAsync(db,requested,ct):[];
                     sourceIds=candidates.Length==0?[]:(await ManagedPublication.Candidates(db,candidates[0].ChannelId).ToListAsync(ct)).OrderByDescending(c=>!string.IsNullOrWhiteSpace(c.EpgId)).ThenBy(c=>c.Priority).ThenBy(c=>c.ProviderId).Select(c=>c.StreamId).ToArray();
                 }
                 else sourceIds=await streams.Where(x=>x.s.Id==requested).Select(x=>x.s.Id).ToArrayAsync(ct);
