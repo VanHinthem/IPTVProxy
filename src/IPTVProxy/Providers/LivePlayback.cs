@@ -53,8 +53,8 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         if (access is null || (!access.Account.AllowRemote && !ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx))) { ctx.Response.StatusCode = 401; return; }
         var authMs=clock.ElapsedMilliseconds;
         var publicId=id;
-        var handoff=ViewerSessions.SinglePlayerHandoff(config,access.Account.Username);
-        using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,"live",publicId,ctx.RequestAborted,handoff);
+        var handoff=config.GetValue("Playback:SingleViewerChannelSwitch",true);
+        using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,"live",publicId,ctx.RequestAborted,handoff,ViewerSessions.ClientKey(ctx));
         if(viewer is null){log.LogWarning("Live account capacity exhausted for account {AccountId}",access.Account.Id);ctx.Response.StatusCode=503;return;}
         var viewerMs=clock.ElapsedMilliseconds;
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
