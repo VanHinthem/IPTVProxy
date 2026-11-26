@@ -66,7 +66,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             {
                 var selected = candidates.FirstOrDefault(c =>
                     sessions.TryGetValue(c.StreamId, out var active) && !active.Closing && active.Subscribers < 16 ||
-                    sessions.Values.Count(s => s.ProviderId == c.ProviderId) < c.Limit);
+                    capacity.HasCapacity(c.ProviderId,c.Limit));
                 id = (selected ?? candidates[0]).StreamId;
             }
         }
@@ -111,21 +111,22 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                     if (occupied.Length < provider.ConnectionLimit)
                     {
                         var lease=capacity.TryReserve(provider.Id,provider.ConnectionLimit);
-                        if(lease is null){ctx.Response.StatusCode=503;return;}
-                        session = new Session(id, provider.Id){Lease=lease};
-                        sessions.Add(id, session);
-                        session.Subscribers++;
-                        start = true;
-                        break;
+                        if(lease is not null)
+                        {
+                            session = new Session(id, provider.Id){Lease=lease};
+                            sessions.Add(id, session);
+                            session.Subscribers++;
+                            start = true;
+                            break;
+                        }
                     }
                     var previous = occupied.FirstOrDefault(s => s.Closing);
                     if (previous is null)
                     {
-                        log.LogWarning("Provider {ProviderId} connection limit reached", provider.Id);
-                        ctx.Response.StatusCode = 503;
-                        return;
+                        if(!handoff){log.LogWarning("Provider {ProviderId} connection limit reached", provider.Id);ctx.Response.StatusCode=503;return;}
+                        release=Task.Delay(100,switchTimeout.Token);
                     }
-                    release = previous.Released.Task;
+                    else release = previous.Released.Task;
                 }
             }
             try { await release!.WaitAsync(switchTimeout.Token); }
