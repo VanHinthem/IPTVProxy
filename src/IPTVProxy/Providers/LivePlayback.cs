@@ -201,7 +201,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         {
             var current = session.Current;
             var ordered = new[] { current }.Concat(sources.Where(x => x.Id != current.Id)).ToArray();
-            foreach (var source in ordered)
+            foreach (var source in ordered.Take(4))
             {
                 ct.ThrowIfCancellationRequested();
                 lock (gate)
@@ -210,7 +210,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                     {
                         session.Lease?.Dispose();
                         session.Lease = capacity.TryReserve(source.Provider.Id, source.Provider.ConnectionLimit);
-                        if (session.Lease is null) continue;
+                        if (session.Lease is null) { log.LogInformation("Live failover skipped: provider {ProviderId} at capacity", source.Provider.Id); continue; }
                         session.Current = source;
                         log.LogInformation("Live failover to provider {ProviderId}, stream {StreamId}", source.Provider.Id, source.Id);
                     }
@@ -224,13 +224,14 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                         await Task.Delay(TimeSpan.FromSeconds(1), ct);
                     }
                     var dataClock = Stopwatch.StartNew();
-                    var received = false;
-                    try { await PumpAttempt(session, source, ct, () => { received = true; dataClock.Restart(); }); }
+                    TimeSpan? firstData = null;
+                    TimeSpan lastData = TimeSpan.Zero;
+                    try { await PumpAttempt(session, source, ct, () => { firstData ??= dataClock.Elapsed; lastData = dataClock.Elapsed; }); }
                     catch (Exception ex) when (!ct.IsCancellationRequested)
                     { log.LogWarning("Upstream failed for stream {StreamId}: {ErrorType}", source.Id, ex.GetType().Name); }
                     // A stable connection earns a fresh retry budget; short flapping
                     // connections do not reset it.
-                    if (received && dataClock.Elapsed >= TimeSpan.FromSeconds(60)) attempt = -1;
+                    if (firstData is not null && lastData - firstData.Value >= TimeSpan.FromSeconds(60)) attempt = -1;
                 }
             }
         }
@@ -277,7 +278,9 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
             while (!ct.IsCancellationRequested)
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromSeconds(20));
+                var remaining = TimeSpan.FromSeconds(10) - lastValid.Elapsed;
+                if (remaining <= TimeSpan.Zero) throw new TimeoutException("No valid TS data.");
+                timeout.CancelAfter(remaining);
                 var count = await input.ReadAsync(buffer.AsMemory(pending), timeout.Token);
                 if (count == 0) { log.LogInformation("Upstream EOF for stream {StreamId}", source.Id); break; }
                 var total = pending + count;
@@ -295,7 +298,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 }
                 var length=0;
                 while(offset+length+188<=total && buffer[offset+length]==0x47)length+=188;
-                if(length>0) { session.Buffer.Append(buffer.AsSpan(offset,length)); lastValid.Restart(); }
+                if(length>0) { session.Buffer.Append(buffer.AsSpan(offset,length)); lastValid.Restart(); onData(); }
                 pending=total-offset-length;
                 if(pending>=188)
                 {
@@ -307,7 +310,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 }
                 else Buffer.BlockCopy(buffer,offset+length,buffer,0,pending);
                 if(length==0)continue;
-                if (first) { log.LogInformation("First upstream data for stream {StreamId}: {Bytes} bytes after {ElapsedMs} ms", source.Id, length,clock.ElapsedMilliseconds); first = false; onData(); }
+                if (first) { log.LogInformation("First upstream data for stream {StreamId}: {Bytes} bytes after {ElapsedMs} ms", source.Id, length,clock.ElapsedMilliseconds); first = false; }
 
             }
     }
