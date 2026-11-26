@@ -70,10 +70,12 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
     public async Task<int> ImportAsync(int providerId,string kind,CancellationToken ct)
     {
         if(kind is not ("movie" or "series"))throw new ArgumentException("Invalid content type.");
-        await imports.WaitAsync(ct);
+        if(!history.TryBegin(providerId,kind))throw new InvalidOperationException("Import already queued or running.");
+        var acquired=false;
         var started=CatalogHistory.Now();
         try
         {
+            await imports.WaitAsync(ct);acquired=true;
             await using var db=await factory.CreateDbContextAsync(ct);
             var p=await db.Providers.AsNoTracking().SingleAsync(p=>p.Id==providerId&&p.Enabled,ct);
             var prefix=kind=="movie"?"vod":"series";
@@ -117,7 +119,7 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         }
         catch(Exception ex) when(!ct.IsCancellationRequested)
         {try{await history.RecordFailure(providerId,kind,started,ex.GetType().Name,ct);}catch{log.LogWarning("VOD import history write failed for provider {ProviderId}",providerId);}throw;}
-        finally{imports.Release();}
+        finally{if(acquired)imports.Release();history.End(providerId,kind);}
     }
     public async Task<List<Category>> Categories(CancellationToken ct)
     {

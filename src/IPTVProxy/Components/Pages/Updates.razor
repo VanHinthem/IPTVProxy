@@ -1,5 +1,7 @@
 @page "/updates"
 @using IPTVProxy.Providers
+@using System.Globalization
+@implements IDisposable
 @inject CatalogHistory History
 @inject LiveCatalog Live
 @inject VodCatalog Vod
@@ -10,15 +12,16 @@
 <button disabled="@busy" @onclick="Refresh">Vernieuwen</button>
 <p role="status">@status</p>
 <h2>Importplanning per provider</h2>
-<table style="width:100%;text-align:left"><thead><tr><th>Provider</th><th>Type</th><th>Interval (uur)</th><th>Laatste succes</th><th>Laatste poging</th><th>Volgende poging</th><th>Actie</th></tr></thead><tbody>
+<table style="width:100%;text-align:left"><thead><tr><th>Provider</th><th>Type</th><th>Interval (uur)</th><th>Laatste succes</th><th>Laatste poging</th><th>Volgende poging</th><th>Importstatus</th><th>Actie</th></tr></thead><tbody>
 @foreach(var row in states)
 {
     <tr @key="(row.State.ProviderId,row.State.Kind)">
     <td>@row.State.Provider</td><td>@Type(row.State.Kind)</td>
-    <td><input type="number" min="0" max="168" style="width:5rem" @bind="row.Hours" /><button disabled="@busy" @onclick="()=>Save(row)">Opslaan</button></td>
+    <td><input type="number" min="0" max="168" style="width:5rem" value="@row.Draft" @oninput="e=>SetDraft(row,e.Value?.ToString())" /><button disabled="@(busy||!row.Valid)" @onclick="()=>Save(row)">Opslaan</button></td>
     <td>@Date(row.State.LastSuccess)</td><td>@Date(row.State.LastAttempt) @(row.State.Success==false?"(mislukt)":row.State.Success==true?"(geslaagd)":"")</td>
-    <td>@(row.State.Hours==0?"Uit":Date(CatalogHistory.Next(row.State,CatalogHistory.Now())))</td>
-    <td><button disabled="@busy" @onclick="()=>Import(row.State)">Nu importeren</button></td></tr>
+    <td>@(Running(row.State) is not null?"Na afronding":row.State.Hours==0?"Uit":Date(CatalogHistory.Next(row.State,CatalogHistory.Now())))</td>
+    <td>@if(Running(row.State) is long since){<strong style="color:#1769aa">Import bezig / in wachtrij</strong><br/><small>@TimeSpan.FromSeconds(Math.Max(0,CatalogHistory.Now()-since)).ToString("c")</small>}else{<span>@(row.State.Success==false?"Mislukt":row.State.Success==true?"Gereed":"Nog niet geïmporteerd")</span>}</td>
+    <td><button disabled="@(busy||Running(row.State)!=null)" @onclick="()=>Import(row.State)">@(Running(row.State)!=null?"Bezig…":"Nu importeren")</button></td></tr>
 }
 </tbody></table>
 <p>0 = automatische import uit. Bij mislukking blijft de vorige catalogus beschikbaar.</p>
@@ -42,26 +45,33 @@
 <button disabled="@(busy||runPage==0)" @onclick="()=>RunPage(runPage-1)">Vorige</button>
 <button disabled="@(busy||runs.Count<=50)" @onclick="()=>RunPage(runPage+1)">Volgende</button>
 @code {
-    private sealed class Row(CatalogHistory.State state){public CatalogHistory.State State{get;}=state;public int Hours{get;set;}=state.Hours;}
+    private sealed class Row(CatalogHistory.State state){public CatalogHistory.State State{get;}=state;public int Hours{get;set;}=state.Hours;public string Draft{get;set;}=state.Hours.ToString(CultureInfo.InvariantCulture);public bool Dirty{get;set;} public bool Valid{get;set;}=true;}
     private List<Row> states=[];
     private List<CatalogHistory.Change> changes=[];
     private List<CatalogHistory.Run> runs=[];
     private int provider,page,runPage;
     private string kind="",entity="",action="",search="",status="";
     private bool busy;
+    private readonly CancellationTokenSource polling=new();
+    private static readonly TimeZoneInfo LocalZone=TimeZoneInfo.FindSystemTimeZoneById("Europe/Amsterdam");
+    private long? Running(CatalogHistory.State s)=>History.RunningSince(s.ProviderId,s.Kind);
+    private static void SetDraft(Row row,string? value){row.Draft=value??"";row.Dirty=true;row.Valid=int.TryParse(value,NumberStyles.None,CultureInfo.InvariantCulture,out var hours)&&hours>=0&&hours<=168;if(row.Valid)row.Hours=hours;}
+    protected override Task OnAfterRenderAsync(bool firstRender){if(firstRender)_=Poll(polling.Token);return Task.CompletedTask;}
+    private async Task Poll(CancellationToken ct){using var timer=new PeriodicTimer(TimeSpan.FromSeconds(3));try{while(await timer.WaitForNextTickAsync(ct)){await InvokeAsync(async()=>{if(!busy)await Run(Load);StateHasChanged();});}}catch(OperationCanceledException) when(ct.IsCancellationRequested){}catch{}}
+    public void Dispose(){polling.Cancel();polling.Dispose();}
     private CancellationToken Ct=>CancellationToken.None;
-    private static string Date(long? value)=>value is long v?DateTimeOffset.FromUnixTimeSeconds(v).UtcDateTime.ToString("dd-MM-yyyy HH:mm 'UTC'"):"—";
+    private static string Date(long? value)=>value is long v?TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(v),LocalZone).ToString("dd-MM-yyyy HH:mm"):"—";
     private static string Type(string kind)=>kind switch{"live"=>"Live TV","movie"=>"Films","series"=>"Series",_=>kind};
     private static string Entity(string value)=>value switch{"category"=>"Categorie","channel"=>"Kanaalbron","logical"=>"Logisch kanaal","title"=>"Titel",_=>value};
     private static string Action(string value)=>value switch{"added"=>"Nieuw","returned"=>"Teruggekeerd","removed"=>"Verdwenen","available"=>"Beschikbaar",_=>value};
     protected override Task OnInitializedAsync()=>Refresh();
     private async Task Run(Func<Task> task){if(busy)return;busy=true;try{await task();}catch(Exception){status="Actie mislukt. Vernieuw het overzicht of controleer de importhistorie.";}finally{busy=false;}}
-    private async Task Load(){states=(await History.States(Ct)).Select(s=>new Row(s)).ToList();await LoadResults();}
+    private async Task Load(){var previous=states;states=(await History.States(Ct)).Select(s=>{var row=new Row(s);var old=previous.FirstOrDefault(x=>x.State.ProviderId==s.ProviderId&&x.State.Kind==s.Kind);if(old?.Dirty==true){row.Hours=old.Hours;row.Draft=old.Draft;row.Dirty=true;row.Valid=old.Valid;}return row;}).ToList();await LoadResults();}
     private async Task LoadResults(){changes=await History.Changes(provider,kind,entity,action,search,page*100,Ct);runs=await History.Runs(provider,kind,runPage*50,Ct);}
     private Task Refresh()=>Run(Load);
     private Task Filter()=>Run(async()=>{page=runPage=0;await LoadResults();});
     private Task ChangePage(int value)=>Run(async()=>{page=Math.Max(0,value);await LoadResults();});
     private Task RunPage(int value)=>Run(async()=>{runPage=Math.Max(0,value);await LoadResults();});
-    private Task Save(Row row)=>Run(async()=>{await History.SetHours(row.State.ProviderId,row.State.Kind,row.Hours,Ct);status="Interval opgeslagen.";await Load();});
-    private Task Import(CatalogHistory.State s)=>Run(async()=>{status="Import bezig...";try{if(s.Kind=="live")await Live.ImportAsync(s.ProviderId,Ct);else await Vod.ImportAsync(s.ProviderId,s.Kind,Ct);status="Import geslaagd.";}catch{status="Import mislukt; bestaande gegevens behouden.";}await Load();});
+    private Task Save(Row row)=>Run(async()=>{await History.SetHours(row.State.ProviderId,row.State.Kind,row.Hours,Ct);row.Dirty=false;status="Interval opgeslagen.";await Load();});
+    private Task Import(CatalogHistory.State s)=>Run(async()=>{status=$"Import bezig: {s.Provider} / {Type(s.Kind)}";StateHasChanged();await Task.Yield();try{if(s.Kind=="live")await Live.ImportAsync(s.ProviderId,Ct);else await Vod.ImportAsync(s.ProviderId,s.Kind,Ct);status="Import geslaagd.";}catch{status="Import mislukt; bestaande gegevens behouden.";}await Load();});
 }

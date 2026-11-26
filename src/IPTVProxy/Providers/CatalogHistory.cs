@@ -5,6 +5,10 @@ namespace IPTVProxy.Providers;
 
 public sealed class CatalogHistory(IDbContextFactory<CatalogDb> factory,IConfiguration config)
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(int,string),long> running=new();
+    public long? RunningSince(int provider,string kind)=>running.TryGetValue((provider,kind),out var started)?started:null;
+    public bool TryBegin(int provider,string kind)=>running.TryAdd((provider,kind),Now());
+    public void End(int provider,string kind)=>running.TryRemove((provider,kind),out _);
     public sealed record State(int ProviderId,string Provider,string Kind,int Hours,long? LastSuccess,long? LastAttempt,bool? Success,int Count,int Categories,int Added,int Removed,string Error);
     public sealed record Run(long Id,string Provider,string Kind,long Started,long Finished,bool Success,int Count,int Categories,int Added,int Removed,string Error);
     public sealed record Change(string Provider,string Kind,string Entity,string Name,string Category,string Action,long Observed);

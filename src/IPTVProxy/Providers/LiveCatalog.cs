@@ -78,10 +78,12 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
     }
     public async Task<int> ImportAsync(int providerId, CancellationToken ct)
     {
-        await ImportGate.WaitAsync(ct);
+        if(!history.TryBegin(providerId,"live"))throw new InvalidOperationException("Import already queued or running.");
+        var acquired=false;
         var started=CatalogHistory.Now();
         try
         {
+            await ImportGate.WaitAsync(ct);acquired=true;
             await using var db = await factory.CreateDbContextAsync(ct);
             var provider = await db.Providers.SingleAsync(p => p.Id == providerId && p.Enabled, ct);
             using var client = clients.CreateClient("provider");
@@ -151,6 +153,6 @@ public sealed class LiveCatalog(IDbContextFactory<CatalogDb> factory, IDataProte
         }
         catch(Exception ex) when(!ct.IsCancellationRequested)
         {try{await history.RecordFailure(providerId,"live",started,ex.GetType().Name,ct);}catch{log.LogWarning("Live import history write failed for provider {ProviderId}",providerId);}throw;}
-        finally { ImportGate.Release(); }
+        finally { if(acquired)ImportGate.Release();history.End(providerId,"live"); }
     }
 }
