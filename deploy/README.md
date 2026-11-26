@@ -1,4 +1,4 @@
-# NAS deployment (Live TV MVP)
+# NAS deployment (IPTVProxy MVP)
 
 Use a CI-tested immutable GHCR image tag. Copy compose.yaml and .env.example into a NAS directory; copy .env.example to .env, chmod 600, use distinct random hexadecimal passwords (openssl rand -hex 24), and fill in the image tag. Keep the named volume and back it up together with its data-protection keys. Never delete the volume to fix an upgrade.
 
@@ -17,3 +17,7 @@ Gebruik uitsluitend een immutable `sha-...` image waarvan CI én Development ima
 
 ## EPG en afbeeldingen
 XMLTV wordt lokaal gecachet en als volledig bestand aangeboden. `Epg__RefreshHours` (standaard 6, 0 uit) stuurt import; `Catalog__RefreshHours` stuurt catalogusimport. `Artwork__CacheMegabytes` standaard 256; cache op persistent volume. Bewaar ook `artwork-signing.key` en data-protectiesleutels bij backup. Artwork-routes zijn ondertekende/beschermde bearer-URLs; geen providercredentials in clientcatalogus. Laat `/artwork/` bereikbaar voor IPTV-clients, maar beperk beheer via reverse proxy. Geen upstream SVG; lokale placeholder mogelijk. Controleer logo's en EPG na clientrefresh. Programma-afbeeldingen alleen indien aangeleverd en ondersteund door client; geen externe verrijking in MVP 2.
+
+
+## Werkblok 3 en 4
+Films en series gebruiken native HTTP Range-playback. Importintervallen worden per provider/type via Updates beheerd (0 = uit). Werkblok 4 introduceert accounts, playlists en onafhankelijke sessies; deze zijn nog niet geaccepteerd. Gebruik de huidige single-viewer configuratie niet voor onafhankelijke externe kijkers. Controleer bij upgrade behoud van IDs, account, catalogus en volume.
