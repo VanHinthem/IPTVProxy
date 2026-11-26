@@ -74,6 +74,9 @@ Check(allTitles.Count==2&&allTitles.Count(t=>t.Published)==1,"VOD search include
 Check((await vodPublication.Search("movie","GLADIATOR",true,0,CancellationToken.None)).Single().Name=="Gladiator","VOD published search and case-insensitivity");
 Check((await vodPublication.Search("series","gladiator",false,0,CancellationToken.None)).Count==1,"VOD search separates content types");
 Check((await vodPublication.Search("movie","no matching title",false,0,CancellationToken.None)).Count==0,"VOD empty search");
+var combinedTitles=await vodPublication.Search("","gladiator",false,0,CancellationToken.None);
+Check(combinedTitles.Count==3&&combinedTitles.Count(t=>t.Kind=="series")==1,"VOD global search across movies and series");
+Check((await vodPublication.Search("","gladiator",true,0,CancellationToken.None)).Count==2,"VOD global published search");
 Console.WriteLine("Catalog checks passed.");
 sealed class FixtureFactory(DbContextOptions<CatalogDb> options):IDbContextFactory<CatalogDb>
 {

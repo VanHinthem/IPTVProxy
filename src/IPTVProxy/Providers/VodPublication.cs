@@ -91,11 +91,11 @@ public sealed class VodPublication(IDbContextFactory<CatalogDb> factory)
         for(int i=0;i<ids.Length;i++)await Exec(c,tx,"INSERT INTO VodPublicationOrder(PublicId,Kind,SortOrder) VALUES($0,$1,$2)",ct,ids[i],kind,i);
         await tx.CommitAsync(ct);
     }
-    public sealed record Title(int Id,string Name,string Provider,string Category,bool Published);
+    public sealed record Title(int Id,string Name,string Provider,string Category,bool Published,string Kind);
     public async Task<List<Title>> Search(string kind,string search,bool onlyPublished,int skip,CancellationToken ct)
     {
         await using var db=await factory.CreateDbContextAsync(ct);await db.Database.OpenConnectionAsync(ct);
-        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.Id,i.Name,p.Name,COALESCE(g.Name,c.Name),("+Visible+") FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+Joins+" WHERE i.Active=1 AND c.Active=1 AND p.Enabled=1 AND i.Kind=$0 AND instr(lower(i.Name),lower($1))>0 AND ($2=0 OR ("+Visible+")) ORDER BY i.Name COLLATE NOCASE,i.Id LIMIT 51 OFFSET $3",kind,search,onlyPublished,Math.Max(0,skip));
-        await using var r=await cmd.ExecuteReaderAsync(ct);var result=new List<Title>();while(await r.ReadAsync(ct))result.Add(new(r.GetInt32(0),r.GetString(1),r.GetString(2),r.GetString(3),r.GetBoolean(4)));return result;
+        await using var cmd=Cmd((SqliteConnection)db.Database.GetDbConnection(),null,"SELECT i.Id,i.Name,p.Name,COALESCE(g.Name,c.Name),("+Visible+"),i.Kind FROM VodItems i JOIN VodCategories c ON c.Id=i.CategoryId JOIN Providers p ON p.Id=i.ProviderId "+Joins+" WHERE i.Active=1 AND c.Active=1 AND p.Enabled=1 AND ($0=\'\' OR i.Kind=$0) AND instr(lower(i.Name),lower($1))>0 AND ($2=0 OR ("+Visible+")) ORDER BY i.Name COLLATE NOCASE,i.Id LIMIT 51 OFFSET $3",kind,search,onlyPublished,Math.Max(0,skip));
+        await using var r=await cmd.ExecuteReaderAsync(ct);var result=new List<Title>();while(await r.ReadAsync(ct))result.Add(new(r.GetInt32(0),r.GetString(1),r.GetString(2),r.GetString(3),r.GetBoolean(4),r.GetString(5)));return result;
     }
 }

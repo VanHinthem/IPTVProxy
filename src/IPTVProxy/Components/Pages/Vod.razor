@@ -94,12 +94,14 @@ else
 </section>
 </div>
 <h3>Titels zoeken</h3>
+<p>Zoek onafhankelijk van het categoriebeheer in de volledige geïmporteerde catalogus.</p>
+<select aria-label="Contenttype" @bind="titleKind" @bind:after="RefreshSearch"><option value="">Films en series</option><option value="movie">Films</option><option value="series">Series</option></select>
 <input placeholder="Film of serie" @bind="titleSearch" @bind:event="oninput" @bind:after="DebounceSearch" />
 <label><input type="checkbox" @bind="onlyPublished" @bind:after="RefreshSearch" /> Alleen gepubliceerd</label>
 <button disabled="@busy" @onclick="()=>SearchTitles(0)">Zoeken</button>
 <p role="status">@searchStatus</p>
-<table style="width:100%;text-align:left"><thead><tr><th>Titel</th><th>Provider</th><th>Categorie</th><th>Publicatie</th></tr></thead><tbody>
-@foreach(var t in titles.Take(50)){<tr><td>@t.Name</td><td>@t.Provider</td><td>@t.Category</td><td>@(t.Published?"Ja":"Nee")</td></tr>}
+<table style="width:100%;text-align:left"><thead><tr><th>Titel</th><th>Type</th><th>Provider</th><th>Categorie</th><th>Publicatie</th></tr></thead><tbody>
+@foreach(var t in titles.Take(50)){<tr><td>@t.Name</td><td>@(t.Kind=="movie"?"Film":"Serie")</td><td>@t.Provider</td><td>@t.Category</td><td>@(t.Published?"Ja":"Nee")</td></tr>}
 </tbody></table>
 <button disabled="@(busy||titlePage==0)" @onclick="()=>SearchTitles(titlePage-1)">Vorige</button>
 <button disabled="@(busy||titles.Count<=50)" @onclick="()=>SearchTitles(titlePage+1)">Volgende</button>
@@ -109,7 +111,7 @@ else
     private List<VodPublication.Group> groups=new();
     private List<VodPublication.Published> published=new();
     private List<VodPublication.Title> titles=new();
-    private string kind="movie",search="",status="",providerFilter="",selectionFilter="",editName="",titleSearch="";
+    private string kind="movie",search="",status="",providerFilter="",selectionFilter="",editName="",titleSearch="",titleKind="";
     private bool busy,editing,editEnabled=true,confirmDelete,onlyPublished;
     private int editId,dragId,titlePage,searchRevision;
     private string searchStatus="Vul minimaal twee tekens in.";
@@ -124,7 +126,7 @@ else
         await Refresh();
     }
     private async Task Refresh(){categories=await Catalog.Categories(Ct);groups=await Publication.Groups(kind,Ct);published=await Publication.List(kind,Ct);}
-    private async Task ChangeKind(string value){if(busy)return;kind=value;CancelEdit();++searchRevision;titles.Clear();titlePage=0;searchStatus="Vul minimaal twee tekens in.";await Refresh();await RefreshSearch();}
+    private async Task ChangeKind(string value){if(busy)return;kind=value;CancelEdit();await Refresh();}
     private async Task Run(Func<Task> action)
     {if(busy)return;busy=true;try{await action();await Refresh();}catch(ArgumentException ex){status=ex.Message;}catch{status="Actie mislukt; bestaande gegevens behouden.";}finally{busy=false;}}
     private Task Import(int id,string type)=>Run(async()=>{status="Import bezig...";var n=await Catalog.ImportAsync(id,type,Ct);status=$"Import geslaagd: {n} items.";});
@@ -155,7 +157,7 @@ else
         searchStatus="Zoeken...";
         try
         {
-            var result=await Publication.Search(kind,term,onlyPublished,Math.Max(0,page)*50,Ct);
+            var result=await Publication.Search(titleKind,term,onlyPublished,Math.Max(0,page)*50,Ct);
             if(revision!=searchRevision)return;
             titles=result;titlePage=Math.Max(0,page);
             searchStatus=result.Count==0?"Geen titels gevonden.":$"Resultaten {titlePage*50+1}–{titlePage*50+Math.Min(50,result.Count)}"+(result.Count>50?" (meer beschikbaar)":"");
