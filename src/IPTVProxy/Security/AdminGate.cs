@@ -11,6 +11,7 @@ public static class AdminGate
         var endpoint = ctx.GetEndpoint() as RouteEndpoint;
         var route = endpoint?.RoutePattern.RawText;
         if (route is "/health" or "/player_api.php" or "/xmltv.php" or "/live/{username}/{password}/{id:int}.ts"
+            or "/movie/{username}/{password}/{id:int}" or "/series/{username}/{password}/{id:int}"
             or "/movie/{username}/{password}/{id:int}.{extension}" or "/series/{username}/{password}/{id:int}.{extension}"
             or "/artwork/{kind}/{id:int}/{signature}" or "/artwork/programme/{token}" or "/live/{username}/{password}/{id:int}" or "/{username}/{password}/{id:int}")
         { await next(); return; }

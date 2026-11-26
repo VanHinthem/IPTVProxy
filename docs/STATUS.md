@@ -44,3 +44,5 @@ PR #6 gemerged op 25 november 2026 (d0ce164). Afsluitende CI 45640294542 en imag
 
 ## Werkblok 3 — eerste increment (26 november 2026)
 Featurebranch: volledige handmatige film/serie-import, standaard niet gepubliceerd; eenvoudige categorie-selectie, Xtream catalogus/details, stabiele film/serie/episode-ID's, detailcache, native Range-proxy en gedeelde providerreserveringen. Geen custom categorieën of periodieke VOD-import in dit increment. Providerformaten, NAS-playback en CI nog te valideren. Alleen geautoriseerde bronnen.
+
+NAS initial VOD: films, posters and descriptions visible; movie and episode playback retry without error. Added sanitized request/route/capacity/upstream diagnostics, extensionless routes and movie_data.id compatibility. Actual cause not yet established. CI/NAS retest pending.

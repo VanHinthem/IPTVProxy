@@ -4,14 +4,16 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts ac
 {
     public async Task Play(HttpContext ctx,string username,string password,int id,string kind,string extension)
     {
-        if(!accounts.IptvValid(username,password)){ctx.Response.StatusCode=401;return;}
+        log.LogInformation("VOD request: {Kind} {Id}, method {Method}, range {HasRange}",kind,id,ctx.Request.Method,ctx.Request.Headers.ContainsKey("Range"));
+        if(!accounts.IptvValid(username,password)){log.LogWarning("VOD authentication rejected");ctx.Response.StatusCode=401;return;}
         var ct=ctx.RequestAborted;
         try
         {
             var media=await vod.Resolve(id,kind,ct);
-            if(media is null||!string.Equals(extension,media.Extension,StringComparison.OrdinalIgnoreCase)){ctx.Response.StatusCode=404;return;}
+            if(media is null){log.LogWarning("VOD item unavailable: {Kind} {Id}",kind,id);ctx.Response.StatusCode=404;return;}
+            if(extension.Length>0&&!string.Equals(extension,media.Extension,StringComparison.OrdinalIgnoreCase))log.LogInformation("VOD requested extension differs; using catalog extension {Extension}",media.Extension);
             using var lease=capacity.TryReserve(media.Provider.Id,media.Provider.ConnectionLimit);
-            if(lease is null){ctx.Response.StatusCode=503;return;}
+            if(lease is null){log.LogWarning("VOD capacity exhausted for provider {ProviderId}, limit {Limit}",media.Provider.Id,media.Provider.ConnectionLimit);ctx.Response.StatusCode=503;return;}
             var credentials=live.Credentials(media.Provider);
             var uri=new Uri(LiveCatalog.ValidateBase(media.Provider.BaseUrl),kind+"/"+Uri.EscapeDataString(credentials.Username)+"/"+Uri.EscapeDataString(credentials.Password)+"/"+media.SourceId+"."+media.Extension);
             using var client=clients.CreateClient("provider");
@@ -22,6 +24,7 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts ac
                 foreach(var header in new[]{"Range","If-Range"})if(ctx.Request.Headers.TryGetValue(header,out var value))req.Headers.TryAddWithoutValidation(header,value.ToArray());
                 using var response=await client.SendAsync(req,HttpCompletionOption.ResponseHeadersRead,startup.Token);
                 var code=(int)response.StatusCode;
+                log.LogInformation("VOD upstream provider {ProviderId}, {Kind} {Id}: HTTP {Status}, hop {Hop}, content length {Length}, range {HasRange}",media.Provider.Id,kind,id,code,hop,response.Content.Headers.ContentLength,response.Content.Headers.ContentRange is not null);
                 if(code is 301 or 302 or 303 or 307 or 308)
                 {
                     if(hop>=5||response.Headers.Location is null||!Uri.TryCreate(uri,response.Headers.Location,out var next)||next.Scheme is not ("http" or "https")||next.UserInfo.Length!=0||next.IsLoopback||(uri.Scheme=="https"&&next.Scheme=="http"))throw new InvalidDataException("Invalid redirect.");
@@ -29,7 +32,7 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts ac
                 }
                 if(code is not (200 or 206 or 416)){ctx.Response.StatusCode=code is 404 or 410?code:502;return;}
                 var type=response.Content.Headers.ContentType?.MediaType;
-                if(code!=416&&type is not null&&!type.StartsWith("video/",StringComparison.OrdinalIgnoreCase)&&type!="application/octet-stream"&&type!="application/mp4"){ctx.Response.StatusCode=502;return;}
+                if(code!=416&&type is not null&&!type.StartsWith("video/",StringComparison.OrdinalIgnoreCase)&&type!="application/octet-stream"&&type!="application/mp4"&&type!="binary/octet-stream"&&type!="application/x-matroska"&&type!="application/force-download"){log.LogWarning("VOD upstream media type rejected for {Kind} {Id}",kind,id);ctx.Response.StatusCode=502;return;}
                 ctx.Response.StatusCode=code;
                 ctx.Response.Headers.CacheControl="no-store";ctx.Response.Headers["X-Accel-Buffering"]="no";
                 if(response.Content.Headers.ContentRange is {} range)ctx.Response.Headers.ContentRange=range.ToString();
@@ -40,11 +43,12 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts ac
                 ctx.Response.ContentType=type??"application/octet-stream";ctx.Response.ContentLength=response.Content.Headers.ContentLength;
                 if(ctx.Request.Method=="HEAD")return;
                 await using var stream=await response.Content.ReadAsStreamAsync(ct);
-                var buffer=new byte[65536];
+                var buffer=new byte[65536];bool first=true;
                 while(true)
                 {
                     using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(30));
                     var n=await stream.ReadAsync(buffer,timeout.Token);if(n==0)break;
+                    if(first){log.LogInformation("VOD first bytes: {Kind} {Id}, {Count}",kind,id,n);first=false;}
                     await ctx.Response.Body.WriteAsync(buffer.AsMemory(0,n),timeout.Token);
                 }
                 return;
@@ -53,7 +57,8 @@ public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts ac
         catch(Exception ex)
         {
             if(!ct.IsCancellationRequested)log.LogWarning("VOD playback failed: {Kind} {Id} {ErrorType}",kind,id,ex.GetType().Name);
-            if(!ctx.Response.HasStarted)ctx.Response.StatusCode=502;else ctx.Abort();
+            if(!ctx.Response.HasStarted){ctx.Response.ContentLength=null;ctx.Response.Headers.Remove("Content-Range");ctx.Response.StatusCode=502;}else ctx.Abort();
         }
+        finally{log.LogInformation("VOD request ended: {Kind} {Id}, HTTP {Status}, aborted {Aborted}",kind,id,ctx.Response.StatusCode,ct.IsCancellationRequested);}
     }
 }

@@ -45,7 +45,7 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
         }
     }
     // Preserve only known descriptive fields; never publish upstream playback URLs.
-    private static readonly string[] Fields=["name","title","original_name","year","release_date","releaseDate","releasedate","added","last_modified","rating","rating_5based","plot","description","cast","director","genre","duration","duration_secs","episode_run_time","youtube_trailer","tmdb_id","tmdb","imdb_id","country","season","episode_num","air_date","stream_icon","cover","cover_big","movie_image","backdrop_path","container_extension","num","stream_type"];
+    private static readonly string[] Fields=["name","title","original_name","year","release_date","releaseDate","releasedate","added","last_modified","rating","rating_5based","plot","description","cast","director","genre","duration","duration_secs","episode_run_time","youtube_trailer","tmdb_id","tmdb","imdb_id","country","season","episode_num","episode_number","season_number","episode_count","air_date","stream_icon","cover","cover_big","movie_image","backdrop_path","container_extension","num","stream_type"];
     private static readonly HashSet<string> Images=new(["stream_icon","cover","cover_big","movie_image","backdrop_path"]);
     private static JsonObject Metadata(JsonObject src)
     {
@@ -216,7 +216,7 @@ public sealed class VodCatalog(IDbContextFactory<CatalogDb> factory,LiveCatalog 
             }
             var result=JsonNode.Parse(cached!)!.AsObject();
             result["info"]=PublicMetadata(result["info"]!.AsObject());
-            if(result["movie_data"] is JsonObject movieData){var m=PublicMetadata(movieData);m["stream_id"]=id;m["direct_source"]="";result["movie_data"]=m;}
+            if(result["movie_data"] is JsonObject movieData){var m=PublicMetadata(movieData);m["stream_id"]=id;m["id"]=id;m["name"]=m["name"]?.DeepClone()??JsonValue.Create(Str(JsonNode.Parse(item.Metadata)!.AsObject(),"name"));m["container_extension"]=item.Extension;m["direct_source"]="";result["movie_data"]=m;}
             if(result["seasons"] is JsonArray seasons)result["seasons"]=new JsonArray(seasons.OfType<JsonObject>().Select(s=>(JsonNode?)PublicMetadata(s)).ToArray());
             if(result["episodes"] is JsonObject groups)
                 foreach(var group in groups.ToList())if(group.Value is JsonArray list)foreach(var node in list)if(node is JsonObject ep){foreach(var key in Images)if(ep[key] is JsonValue v)ep[key]=artwork.ProgrammeUrl(v.ToString());ep["info"]=PublicMetadata(ep["info"]!.AsObject());}

@@ -13,6 +13,8 @@ public static class XtreamEndpoints
         app.MapGet("/artwork/programme/{token}", ProgrammeArtwork).RequireRateLimiting("artwork");
         app.MapMethods("/movie/{username}/{password}/{id:int}.{extension}", ["GET","HEAD"], (HttpContext ctx,string username,string password,int id,string extension,VodPlayback playback)=>playback.Play(ctx,username,password,id,"movie",extension)).RequireRateLimiting("xtream");
         app.MapMethods("/series/{username}/{password}/{id:int}.{extension}", ["GET","HEAD"], (HttpContext ctx,string username,string password,int id,string extension,VodPlayback playback)=>playback.Play(ctx,username,password,id,"series",extension)).RequireRateLimiting("xtream");
+        app.MapMethods("/movie/{username}/{password}/{id:int}", ["GET","HEAD"], (HttpContext ctx,string username,string password,int id,VodPlayback playback)=>playback.Play(ctx,username,password,id,"movie","")).RequireRateLimiting("xtream");
+        app.MapMethods("/series/{username}/{password}/{id:int}", ["GET","HEAD"], (HttpContext ctx,string username,string password,int id,VodPlayback playback)=>playback.Play(ctx,username,password,id,"series","")).RequireRateLimiting("xtream");
         app.MapGet("/xmltv.php", XmlTv).RequireRateLimiting("xtream");
         app.MapGet("/player_api.php", Api).RequireRateLimiting("xtream");
         app.MapGet("/live/{username}/{password}/{id:int}.ts", (HttpContext ctx, string username, string password, int id, LivePlayback playback) => playback.Play(ctx, username, password, id)).RequireRateLimiting("xtream");

@@ -69,6 +69,14 @@ await using (var scope = app.Services.CreateAsyncScope())
     }
 }
 app.UseRouting();
+app.Use(async (ctx,next)=>{
+    if(ctx.Request.Path.StartsWithSegments("/movie")||ctx.Request.Path.StartsWithSegments("/series"))
+    {
+        try { await next(); }
+        finally { app.Logger.LogInformation("VOD HTTP {Method}, matched {Matched}, status {Status}",ctx.Request.Method,ctx.GetEndpoint() is RouteEndpoint,ctx.Response.StatusCode); }
+    }
+    else await next();
+});
 app.UseRateLimiter();
 app.Use(async (ctx, next) => await AdminGate.Invoke(ctx, next, app.Services.GetRequiredService<LocalAccounts>()));
 app.UseAntiforgery();
