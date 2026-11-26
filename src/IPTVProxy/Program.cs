@@ -20,6 +20,7 @@ builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(P
 builder.Services.AddDbContextFactory<CatalogDb>(options => options.UseSqlite(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = Path.Combine(dataDir, "iptvproxy.db") }.ToString()));
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddSingleton<LocalAccounts>();
+builder.Services.AddSingleton<ViewerAccounts>();
 builder.Services.AddSingleton<LiveCatalog>();
 builder.Services.AddSingleton<CatalogHistory>();
 builder.Services.AddHostedService<CatalogRefresh>();
@@ -72,6 +73,7 @@ await using (var scope = app.Services.CreateAsyncScope())
         await transaction.CommitAsync();
     }
 }
+await app.Services.GetRequiredService<ViewerAccounts>().Bootstrap(CancellationToken.None);
 app.UseRouting();
 app.Use(async (ctx,next)=>{
     if(ctx.Request.Path.StartsWithSegments("/movie")||ctx.Request.Path.StartsWithSegments("/series"))
