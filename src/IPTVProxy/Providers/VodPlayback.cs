@@ -1,16 +1,17 @@
 using IPTVProxy.Security;
 namespace IPTVProxy.Providers;
-public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,LocalAccounts accounts,IHttpClientFactory clients,VodRequestCoordinator requests,IConfiguration config,ILogger<VodPlayback> log)
+public sealed class VodPlayback(VodCatalog vod,LiveCatalog live,ViewerAccounts accounts,IHttpClientFactory clients,VodRequestCoordinator requests,IConfiguration config,ILogger<VodPlayback> log)
 {
     public async Task Play(HttpContext ctx,string username,string password,int id,string kind,string extension)
     {
         log.LogInformation("VOD request: {Kind} {Id}, method {Method}, range {HasRange}",kind,id,ctx.Request.Method,ctx.Request.Headers.ContainsKey("Range"));
-        if(!accounts.IptvValid(username,password)){log.LogWarning("VOD authentication rejected");ctx.Response.StatusCode=401;return;}
+        var access=await accounts.Authenticate(username,password,ctx.RequestAborted);
+        if(access is null){log.LogWarning("VOD authentication rejected");ctx.Response.StatusCode=401;return;}
         var ct=ctx.RequestAborted;
         bool replaced=false;
         try
         {
-            var media=await vod.Resolve(id,kind,ct);
+            var media=await vod.Resolve(id,kind,ct,access);
             if(media is null){log.LogWarning("VOD item unavailable: {Kind} {Id}",kind,id);ctx.Response.StatusCode=404;return;}
             if(extension.Length>0&&!string.Equals(extension,media.Extension,StringComparison.OrdinalIgnoreCase))log.LogInformation("VOD requested extension differs; using catalog extension {Extension}",media.Extension);
             var key=new VodRequestCoordinator.Key(media.Provider.Id,kind,id,username,ctx.Connection.RemoteIpAddress?.ToString()??"unknown");
