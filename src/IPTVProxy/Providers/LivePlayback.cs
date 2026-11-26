@@ -1,4 +1,5 @@
 using IPTVProxy.Data;
+using System.Diagnostics;
 using IPTVProxy.Security;
 using Microsoft.EntityFrameworkCore;
 
@@ -46,13 +47,16 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
 
     public async Task Play(HttpContext ctx, string username, string password, int id)
     {
+        var clock=Stopwatch.StartNew();
         log.LogInformation("Playback requested: stream {StreamId}", id);
         var access=await accounts.Authenticate(username,password,ctx.RequestAborted);
         if (access is null || (!access.Account.AllowRemote && !ctx.RequestServices.GetRequiredService<ClientNetwork>().IsLocal(ctx))) { ctx.Response.StatusCode = 401; return; }
+        var authMs=clock.ElapsedMilliseconds;
         var publicId=id;
         var handoff=ViewerSessions.SinglePlayerHandoff(config,access.Account.Username);
         using var viewer=await viewers.Acquire(access.Account.Id,access.Account.MaxStreams,"live",publicId,ctx.RequestAborted,handoff);
         if(viewer is null){log.LogWarning("Live account capacity exhausted for account {AccountId}",access.Account.Id);ctx.Response.StatusCode=503;return;}
+        var viewerMs=clock.ElapsedMilliseconds;
         await using var db = await factory.CreateDbContextAsync(ctx.RequestAborted);
         if (id > ManagedPublication.PublicOffset)
         {
@@ -85,6 +89,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
         var provider = await db.Providers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stream.ProviderId && x.Enabled, ctx.RequestAborted);
         if (provider is null) { ctx.Response.StatusCode = 404; return; }
         viewer.Bind(provider.Id,id);
+        var resolvedMs=clock.ElapsedMilliseconds;
         Session session;
         bool start = false;
         using var switchTimeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted,viewer.Token);
@@ -136,9 +141,11 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 return;
             }
         }
-        log.LogInformation("Stream {StreamId}: new upstream {NewUpstream}", id, start);
+        var readyMs=clock.ElapsedMilliseconds;
+        log.LogInformation("Stream {StreamId}: new upstream {NewUpstream}; auth {AuthMs} ms, viewer {ViewerMs} ms, resolve {ResolveMs} ms, capacity {CapacityMs} ms", id,start,authMs,viewerMs-authMs,resolvedMs-viewerMs,readyMs-resolvedMs);
         // Start with up to 1 MiB of recent history, without delaying cold starts.
-        var cursor = session.Buffer.StartPosition(1024 * 1024);
+        var cursor = session.Buffer.DecoderStartPosition(1024 * 1024);
+        bool firstDownstream=true;
         if (start) _ = Pump(session, provider, stream.SourceId);
         try
         {
@@ -164,6 +171,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 timeout.CancelAfter(TimeSpan.FromSeconds(20));
                 await ctx.Response.Body.WriteAsync(output.AsMemory(0, read.Count), timeout.Token);
                 viewer.AddBytes(read.Count);
+                if(firstDownstream){firstDownstream=false;log.LogInformation("First downstream data for stream {StreamId}: {ElapsedMs} ms total, {ReadyMs} ms after reservation",id,clock.ElapsedMilliseconds,clock.ElapsedMilliseconds-readyMs);}
             }
             if (!ctx.Response.HasStarted) ctx.Response.StatusCode = 502;
         }
@@ -192,6 +200,7 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
 
     private async Task Pump(Session session, Provider provider, long sourceId)
     {
+        var clock=Stopwatch.StartNew();
         var ct = session.Stop.Token;
         await Task.Yield();
         try
@@ -210,8 +219,9 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 throw new InvalidDataException("Unsupported media type.");
             await using var input = await upstream.Content.ReadAsStreamAsync(ct);
             // Preserve TS packet boundaries for subscribers joining an active stream.
-            var buffer = new byte[188 * 256];
+            var buffer = new byte[188 * 256 + 376];
             var pending = 0;
+            var synchronized=false;
             var first = true;
             while (!ct.IsCancellationRequested)
             {
@@ -220,12 +230,33 @@ public sealed class LivePlayback(IHttpClientFactory clients, LiveCatalog catalog
                 var count = await input.ReadAsync(buffer.AsMemory(pending), timeout.Token);
                 if (count == 0) { log.LogInformation("Upstream EOF for stream {StreamId}", session.Id); break; }
                 var total = pending + count;
-                var length = total / 188 * 188;
-                if (length == 0) { pending = total; continue; }
-                session.Buffer.Append(buffer.AsSpan(0, length));
-                pending = total - length;
-                Buffer.BlockCopy(buffer, length, buffer, 0, pending);
-                if (first) { log.LogInformation("First upstream data for stream {StreamId}: {Bytes} bytes", session.Id, length); first = false; }
+                var offset=0;
+                if(!synchronized)
+                {
+                    offset=SharedStreamBuffer.FindSync(buffer.AsSpan(0,total));
+                    if(offset<0)
+                    {
+                        pending=Math.Min(total,376);
+                        Buffer.BlockCopy(buffer,total-pending,buffer,0,pending);
+                        continue;
+                    }
+                    synchronized=true;
+                }
+                var length=0;
+                while(offset+length+188<=total && buffer[offset+length]==0x47)length+=188;
+                if(length>0)session.Buffer.Append(buffer.AsSpan(offset,length));
+                pending=total-offset-length;
+                if(pending>=188)
+                {
+                    synchronized=false;
+                    log.LogWarning("TS sync lost for stream {StreamId}",session.Id);
+                    // Preserve a bounded tail for resynchronization across reads.
+                    pending=Math.Min(pending,376);
+                    Buffer.BlockCopy(buffer,total-pending,buffer,0,pending);
+                }
+                else Buffer.BlockCopy(buffer,offset+length,buffer,0,pending);
+                if(length==0)continue;
+                if (first) { log.LogInformation("First upstream data for stream {StreamId}: {Bytes} bytes after {ElapsedMs} ms", session.Id, length,clock.ElapsedMilliseconds); first = false; }
 
             }
         }
